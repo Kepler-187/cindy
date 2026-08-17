@@ -224,6 +224,7 @@ function reviewedInstallOptions(
 ) {
   return {
     expectedReleaseId: item.currentRelease.id,
+    expectedManifest: manifest(item.ghostId, item.currentRelease.version),
     allowSourceReplacement,
   };
 }
