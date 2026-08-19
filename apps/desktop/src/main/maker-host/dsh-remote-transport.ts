@@ -20,6 +20,7 @@ export interface SshDshTransportOptions {
   workingDir: string;
   configYaml: string;
   bridgeSource: string;
+  launcherSource: string;
   apiKey: string;
   sessionRoot: string;
   logger: Logger;
@@ -33,9 +34,8 @@ const MAX_PENDING_WRITES = 256;
 const DSH_REMOTE_WRAPPER = String.raw`set -eu
 ROOT="$HOME/.xdt-server/v1/dsh"
 NODE="$HOME/.xdt-server/v1/node/bin/node"
-BIN="$ROOT/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js"
 [ -x "$NODE" ] || { printf '%s\n' 'CINDY_DSH_ERROR bundled node is missing' >&2; exit 72; }
-[ -f "$BIN" ] || { printf '%s\n' 'CINDY_DSH_ERROR runtime is not installed' >&2; exit 73; }
+[ -f "$ROOT/node_modules/@deepseek-ai/dsh/package.json" ] || { printf '%s\n' 'CINDY_DSH_ERROR runtime is not installed' >&2; exit 73; }
 umask 077
 mkdir -p "$ROOT/runs"
 RUN_DIR="$(mktemp -d "$ROOT/runs/session.XXXXXXXX")"
@@ -43,21 +43,31 @@ cleanup() { rm -rf "$RUN_DIR"; }
 trap cleanup EXIT HUP INT TERM
 IFS= read -r CONFIG_B64
 IFS= read -r BRIDGE_B64
+IFS= read -r LAUNCHER_B64
 IFS= read -r API_KEY_B64
 IFS= read -r DSH_CWD_B64
 IFS= read -r SESSION_ROOT_B64
 printf '%s' "$CONFIG_B64" | base64 -d > "$RUN_DIR/cordis.yml"
 printf '%s' "$BRIDGE_B64" | base64 -d > "$RUN_DIR/cindy-dsh-bridge.mjs"
+printf '%s' "$LAUNCHER_B64" | base64 -d > "$RUN_DIR/cindy-dsh-bin.mjs"
+printf '%s\n' '[]' > "$RUN_DIR/cindy-dsh-empty.yml"
 API_KEY="$(printf '%s' "$API_KEY_B64" | base64 -d)"
 DSH_CWD="$(printf '%s' "$DSH_CWD_B64" | base64 -d)"
-DSH_SESSION_ROOT="$(printf '%s' "$SESSION_ROOT_B64" | base64 -d)"
-export DEEPSEEK_API_KEY="$API_KEY" DSH_CWD DSH_SESSION_ROOT="$DSH_SESSION_ROOT"
+DSH_SESSION_ROOT_RAW="$(printf '%s' "$SESSION_ROOT_B64" | base64 -d)"
+case "$DSH_SESSION_ROOT_RAW" in
+  '$HOME/'*) DSH_SESSION_ROOT="$HOME/$(printf '%s' "$DSH_SESSION_ROOT_RAW" | cut -c 7-)" ;;
+  /*) DSH_SESSION_ROOT="$DSH_SESSION_ROOT_RAW" ;;
+  *) printf '%s\n' 'CINDY_DSH_ERROR session root must be absolute or start with $HOME/' >&2; exit 74 ;;
+esac
+mkdir -p "$HOME/.dsh" "$DSH_SESSION_ROOT"
+chmod 700 "$HOME/.dsh" "$DSH_SESSION_ROOT"
+export DEEPSEEK_API_KEY="$API_KEY" DSH_CWD DSH_HOME="$HOME/.dsh" DSH_SESSION_ROOT
 cd "$DSH_CWD"
-exec "$NODE" "$BIN" "$RUN_DIR/cordis.yml"`;
+exec "$NODE" "$RUN_DIR/cindy-dsh-bin.mjs" "$RUN_DIR/cordis.yml"`;
 
 function envelopeLine(value: string): string {
   // Values are one physical line so the remote wrapper can consume exactly
-  // five headers before transparently relaying JSONL.
+  // six headers before transparently relaying JSONL.
   return Buffer.from(value, 'utf8').toString('base64');
 }
 
@@ -123,9 +133,16 @@ export async function createSshDshTransport(opts: SshDshTransportOptions): Promi
   channel.onError((error) => fireClose({ code: null, signal: null, reason: `dsh SSH channel error: ${redactCredentialText(error.message)}` }));
   channel.onClose(({ code, signal }) => fireClose({ code, signal: signal as NodeJS.Signals | null, reason: `dsh remote process exited (code=${code}, signal=${signal})` }));
 
-  // These five writes complete the private launch envelope. JSON-RPC writes
+  // These six writes complete the private launch envelope. JSON-RPC writes
   // are not permitted until the envelope has drained, preserving framing.
-  for (const header of [opts.configYaml, opts.bridgeSource, opts.apiKey, opts.workingDir, opts.sessionRoot].map(envelopeLine)) {
+  for (const header of [
+    opts.configYaml,
+    opts.bridgeSource,
+    opts.launcherSource,
+    opts.apiKey,
+    opts.workingDir,
+    opts.sessionRoot,
+  ].map(envelopeLine)) {
     if (!channel.write(`${header}\n`)) {
       await new Promise<void>((resolve, reject) => {
         const off = channel.onDrain(() => { off(); resolve(); });

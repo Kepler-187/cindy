@@ -5,7 +5,11 @@ vi.mock('@cindy/maker-remote-ssh', () => ({
 }));
 
 import type { RemoteHost } from '@cindy/maker-remote-ssh';
-import { ensureDshRuntime } from '../dsh-remote-installer.js';
+import {
+  DSH_RUNTIME_FINGERPRINT,
+  DSH_RUNTIME_PACKAGE_NAMES,
+  ensureDshRuntime,
+} from '../dsh-remote-installer.js';
 
 type ExecMock = ReturnType<typeof vi.fn<(command: string, opts?: unknown) => Promise<{ exitCode: number; stdout: string; stderr: string }>>>;
 
@@ -21,7 +25,16 @@ describe('ensureDshRuntime', () => {
     expect(exec.mock.calls[0][0]).toContain('bundled-node-install');
     const installCommand = String(exec.mock.calls[1][0]);
     expect(installCommand).toContain('bash -c');
-    expect(installCommand).toContain('0.1.0-rc.7');
+    expect(installCommand).toContain(DSH_RUNTIME_FINGERPRINT);
+    expect(installCommand).toContain('.cindy-dsh-runtime');
+    expect(installCommand).not.toContain('.cindy-dsh-version');
+    for (const required of [
+      '@deepseek-ai/dsh',
+      '@deepseek-ai/dsh-base',
+      '@deepseek-ai/dsh-web-app',
+      '@deepseek-ai/dsh-agent-presets',
+      '@deepseek-ai/dsh-code-runtime-worker-thread',
+    ]) expect(DSH_RUNTIME_PACKAGE_NAMES).toContain(required);
     expect(exec.mock.calls[1][1]).toMatchObject({ label: 'dsh-remote-runtime-install' });
   });
 

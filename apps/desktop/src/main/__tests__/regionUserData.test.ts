@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveRegionUserDataDirName } from '../regionUserData';
+import { resolveRegionUserDataDirName, shouldUsePassiveSharedUserData } from '../regionUserData';
 
 /**
  * 同机双装的核心不变量:保持已发布的 cn=Cindy、global=CindyGlobal 映射，数据库 /
@@ -19,6 +19,25 @@ describe('resolveRegionUserDataDirName', () => {
     expect(
       resolveRegionUserDataDirName({ isPackaged: true, region: 'cn', argv: ARGV }),
     ).toBeNull();
+  });
+
+  it('Beta 强制指向同区域正式 profile，而不是 CindyBeta 默认目录', () => {
+    expect(
+      resolveRegionUserDataDirName({
+        isPackaged: true,
+        region: 'cn',
+        desktopVariant: 'beta',
+        argv: ['CindyBeta.exe'],
+      }),
+    ).toBe('Cindy');
+    expect(
+      resolveRegionUserDataDirName({
+        isPackaged: true,
+        region: 'global',
+        desktopVariant: 'beta',
+        argv: ['CindyBeta.exe'],
+      }),
+    ).toBe('CindyGlobal');
   });
 
   it('dev(非 packaged)按区域选择正式 profile，隔离沙箱再基于它派生', () => {
@@ -59,5 +78,14 @@ describe('resolveRegionUserDataDirName', () => {
         envUserDataDir: '/tmp/custom-profile',
       }),
     ).toBe('CindyGlobal');
+  });
+});
+
+describe('shouldUsePassiveSharedUserData', () => {
+  it('keeps packaged Beta out of the shared profile migration writer path, including first login', () => {
+    expect(shouldUsePassiveSharedUserData({ isPackaged: true, isBeta: true })).toBe(true);
+    expect(shouldUsePassiveSharedUserData({ isPackaged: true, isBeta: false, envPassive: '1' })).toBe(false);
+    expect(shouldUsePassiveSharedUserData({ isPackaged: false, isBeta: false, envPassive: '1' })).toBe(true);
+    expect(shouldUsePassiveSharedUserData({ isPackaged: false, isBeta: false })).toBe(false);
   });
 });

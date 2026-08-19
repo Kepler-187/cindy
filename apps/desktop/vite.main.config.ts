@@ -40,6 +40,9 @@ export default defineConfig(({ mode }) => {
       'import.meta.env.VITE_CINDY_AUTH_REGION': JSON.stringify(
         readViteEnv('VITE_CINDY_AUTH_REGION'),
       ),
+      'import.meta.env.VITE_CINDY_DESKTOP_VARIANT': JSON.stringify(
+        readViteEnv('VITE_CINDY_DESKTOP_VARIANT'),
+      ),
       // 本区与对端的两份端点清单自举基址(业务端点已全部改走运行期清单,
       // 旧的 VITE_API_BASE_URL 等端点 define 随之退役)。dev 构建也注入 cn 值,
       // `--endpoints-cdn` 才能零配置直连线上清单。

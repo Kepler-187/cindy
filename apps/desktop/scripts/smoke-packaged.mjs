@@ -59,10 +59,11 @@ function parseArgs() {
   const outDir = out['out-dir'] || null;
   const appName = out['app-name'] || PACKAGED_APP_NAME;
   const pluginStorage = args.includes('--plugin-storage');
-  return { platform, arch, outDir, appName, pluginStorage };
+  const expectPassiveEmpty = args.includes('--expect-passive-empty');
+  return { platform, arch, outDir, appName, pluginStorage, expectPassiveEmpty };
 }
 
-const { platform, arch, outDir, appName, pluginStorage } = parseArgs();
+const { platform, arch, outDir, appName, pluginStorage, expectPassiveEmpty } = parseArgs();
 
 if (!['win32', 'darwin', 'linux'].includes(platform)) {
   console.error(`[smoke] ERROR: unsupported --platform=${platform}`);
@@ -230,6 +231,22 @@ child.on('exit', (code, signal) => {
   } catch (err) {
     console.error(`[smoke] FAIL: JSON parse error: ${err instanceof Error ? err.message : err}`);
     console.error(`[smoke]       line: ${jsonLine}`);
+    cleanupUserData();
+    process.exit(1);
+  }
+
+  // Beta 与正式版共用 userData，且只作为 schema reader。空白临时 profile
+  // 必须被拒绝；真实使用时会打开正式版已创建、且 migration 完全一致的数据库。
+  if (expectPassiveEmpty) {
+    const expectedError = typeof parsed.error === 'string' &&
+      parsed.error.includes('MIGRATE_FAILED') &&
+      parsed.error.includes('schema-version-behind');
+    if (expectedError && code === 1) {
+      console.log('✅ passive shared-profile smoke passed: empty profile safely rejected');
+      cleanupUserData();
+      process.exit(0);
+    }
+    console.error('[smoke] FAIL: Beta empty shared-profile guard did not reject startup as expected');
     cleanupUserData();
     process.exit(1);
   }

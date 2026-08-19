@@ -19,16 +19,13 @@ import { resolveDshLauncher, resolveDshVendorOptions } from '../dsh-host.js';
 describe('resolveDshLauncher', () => {
   it('uses an explicit absolute override without falling through', () => {
     const override = path.resolve('dsh-test', 'custom-launcher.mjs');
-    const resolveFallback = vi.fn(() => 'fallback.js');
     expect(
       resolveDshLauncher({
         override,
         exists: (candidate) => candidate === override,
         appPath: path.resolve('app'),
-        resolveFallback,
       }),
     ).toBe(override);
-    expect(resolveFallback).not.toHaveBeenCalled();
   });
 
   it('prefers the Cindy launcher in development and packaged layouts', () => {
@@ -51,15 +48,14 @@ describe('resolveDshLauncher', () => {
     ).toBe(path.join(packagedAppPath, '.vite', 'build', 'cindy-dsh-bin.mjs'));
   });
 
-  it('retains packaged-bin as the fallback and rejects invalid overrides', () => {
+  it('fails closed when the Cindy launcher is missing and rejects invalid overrides', () => {
     expect(
       resolveDshLauncher({
         appPath: path.resolve('app'),
         isPackaged: false,
         exists: () => false,
-        resolveFallback: () => path.resolve('runtime', 'packaged-bin.js'),
       }),
-    ).toBe(path.resolve('runtime', 'packaged-bin.js'));
+    ).toBeNull();
     expect(
       resolveDshLauncher({
         override: '.\\relative.mjs',

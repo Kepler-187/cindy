@@ -14,6 +14,7 @@
 import { BrowserWindow, app, nativeTheme } from 'electron';
 import path from 'node:path';
 import windowStateKeeper from 'electron-window-state';
+import { CURRENT_DESKTOP_ICON_FILENAME } from '../../shared/brandRegion.js';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 import { createLogger } from '../logger.js';
@@ -50,8 +51,8 @@ export function createRightSidebarWindow(): BrowserWindow {
     minHeight: 480,
     title: BRAND_NAME,
     icon: app.isPackaged
-      ? path.join(process.resourcesPath, 'icon.png')
-      : path.join(__dirname, '../../resources/icon.png'),
+      ? path.join(process.resourcesPath, CURRENT_DESKTOP_ICON_FILENAME)
+      : path.join(__dirname, '../../resources', CURRENT_DESKTOP_ICON_FILENAME),
     autoHideMenuBar: true,
     show: false,
     backgroundColor: bgColor,

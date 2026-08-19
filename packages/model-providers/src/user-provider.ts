@@ -120,16 +120,30 @@ function toCatalogModel(
       ? m.reasoning === true
         ? [...(m.reasoningEfforts ?? [])]
         : []
-      : (CUSTOM_EFFORTS[agent] ?? []);
+      : agent === 'dsh'
+        ? m.dshThinkingPolicy
+          ? []
+          : (m.dshReasoningEfforts ?? ['low', 'high', 'max']).filter(
+              (effort): effort is 'low' | 'high' | 'max' => effort !== 'off',
+            )
+        : (CUSTOM_EFFORTS[agent] ?? []);
   const registryEfforts = registryEffortMetadata(modelRegistry, m.id, agent);
   const effectiveEfforts = registryEfforts?.efforts ?? efforts;
+  const dshDefault =
+    agent === 'dsh' && m.dshReasoningEffort !== 'off'
+      ? m.dshReasoningEffort
+      : undefined;
   const defaultEffort =
     registryEfforts?.defaultEffort ??
-    (agent === 'pi' && m.reasoningDefaultEffort && effectiveEfforts.includes(m.reasoningDefaultEffort)
-      ? m.reasoningDefaultEffort
-      : effectiveEfforts.includes(DEFAULT_CUSTOM_EFFORT)
-        ? DEFAULT_CUSTOM_EFFORT
-        : (effectiveEfforts[0] ?? null));
+    (dshDefault && effectiveEfforts.includes(dshDefault)
+      ? dshDefault
+      : agent === 'pi' &&
+          m.reasoningDefaultEffort &&
+          effectiveEfforts.includes(m.reasoningDefaultEffort)
+        ? m.reasoningDefaultEffort
+        : effectiveEfforts.includes(DEFAULT_CUSTOM_EFFORT)
+          ? DEFAULT_CUSTOM_EFFORT
+          : (effectiveEfforts[0] ?? null));
   const contextWindow = m.contextWindow ?? DEFAULT_CUSTOM_CONTEXT_WINDOW;
   const maxOutput = agent === 'dsh'
     ? Math.min(m.maxOutput ?? DEFAULT_DSH_MAX_OUTPUT, contextWindow)

@@ -1130,11 +1130,13 @@ function ModelSelectorContentView({
         ? (cc.capabilities?.effortLevels ?? [])
         : currentAgentKind === 'codex'
           ? (codex.capabilities?.effortLevels ?? [])
-          : currentAgentKind === 'pi'
-            ? (pi.capabilities?.effortLevels ?? [])
+        : currentAgentKind === 'pi'
+          ? (pi.capabilities?.effortLevels ?? [])
+          : currentAgentKind === 'dsh'
+            ? (dsh.capabilities?.effortLevels ?? [])
             : [];
     return new Map(levels.map((e) => [e.id, e.displayName]));
-  }, [currentAgentKind, cc.capabilities, codex.capabilities, pi.capabilities]);
+  }, [currentAgentKind, cc.capabilities, codex.capabilities, pi.capabilities, dsh.capabilities]);
   // 档名多语言:i18n 词表(effortLevels.*) → 模型级 effortDisplayNames →
   // capabilities displayName(未知档兜底) → 原 id。
   const effortLabelFor = (m: RowModel, e: Effort) => modelEffortLabel(t, m, e, effortMeta.get(e));
@@ -2610,11 +2612,13 @@ export function ModelSelector({
         ? (cc.capabilities?.effortLevels ?? [])
         : currentAgentKind === 'codex'
           ? (codex.capabilities?.effortLevels ?? [])
-          : currentAgentKind === 'pi'
-            ? (pi.capabilities?.effortLevels ?? [])
+        : currentAgentKind === 'pi'
+          ? (pi.capabilities?.effortLevels ?? [])
+          : currentAgentKind === 'dsh'
+            ? (dsh.capabilities?.effortLevels ?? [])
             : [];
     return new Map(levels.map((e) => [e.id, e.displayName]));
-  }, [currentAgentKind, cc.capabilities, codex.capabilities, pi.capabilities]);
+  }, [currentAgentKind, cc.capabilities, codex.capabilities, pi.capabilities, dsh.capabilities]);
   // 档名多语言(与列表侧 effortLabelFor 同序):i18n 词表 → 模型级覆盖 → capabilities 英文名 → id。
   const labelOf = (e: Effort) => modelEffortLabel(t, currentModel, e, effortMeta.get(e));
 

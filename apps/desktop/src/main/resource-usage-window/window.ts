@@ -10,6 +10,7 @@
 
 import { BrowserWindow, app, nativeTheme } from 'electron';
 import path from 'node:path';
+import { CURRENT_DESKTOP_ICON_FILENAME } from '../../shared/brandRegion.js';
 
 import { createLogger } from '../logger.js';
 import { markAppContentWindow } from '../windowFocusClassifier.js';
@@ -35,8 +36,8 @@ export function createResourceUsageWindow(parent?: BrowserWindow | null): Browse
     minHeight: 320,
     title: 'Resource Usage',
     icon: app.isPackaged
-      ? path.join(process.resourcesPath, 'icon.png')
-      : path.join(__dirname, '../../resources/icon.png'),
+      ? path.join(process.resourcesPath, CURRENT_DESKTOP_ICON_FILENAME)
+      : path.join(__dirname, '../../resources', CURRENT_DESKTOP_ICON_FILENAME),
     autoHideMenuBar: true,
     show: false,
     backgroundColor: bgColor,

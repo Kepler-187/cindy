@@ -5,13 +5,14 @@ import os from 'node:os';
 import path from 'node:path';
 
 import type { AgentEvent, UsageSnapshot } from '../../types/events.js';
-import type { AgentKind, UserContentBlock, UserMessage } from '../../types/common.js';
+import type { AgentKind, Effort, PermissionMode, UserContentBlock, UserMessage } from '../../types/common.js';
 import type { Capabilities } from '../../types/capabilities.js';
 import { BaseAgent, type AgentDeps, type AgentSessionHandle, type SendOptions, type StartSessionOptions } from '../base-agent.js';
 import { buildDshCordisConfig, renderDshCordisYaml } from './composition.js';
 import { DSH_BRIDGE_SOURCE } from './bridge-source.js';
 import type {
   DshInitializeResult,
+  DshPermissionPreset,
   DshReasoningEffort,
   DshSessionEventNotificationParams,
   DshSessionStatusNotificationParams,
@@ -35,6 +36,31 @@ export interface DshVendorOptions {
   dshModels?: readonly DshVendorModel[];
   dshReasoningEffort?: DshReasoningEffort;
   dshThinkingPolicy?: DshThinkingPolicy;
+  /** DSH-owned Agent preset selected before the first turn. */
+  dshAgentPreset?: string;
+}
+
+const DSH_PERMISSION_MODES = [
+  { id: 'ask' as const, displayName: 'Read Only' },
+  { id: 'auto' as const, displayName: 'Workspace Write' },
+  { id: 'bypassPermissions' as const, displayName: 'Full access' },
+];
+const DSH_EFFORTS = [
+  { id: 'low' as const, displayName: 'Low' },
+  { id: 'high' as const, displayName: 'High' },
+  { id: 'max' as const, displayName: 'Max' },
+];
+
+function dshReasoningEffortFor(effort: Effort): Exclude<DshReasoningEffort, 'off'> {
+  if (effort === 'low' || effort === 'high' || effort === 'max') return effort;
+  throw new Error(`dsh does not support reasoning effort ${effort}`);
+}
+
+export function dshPermissionPresetFor(mode: PermissionMode): DshPermissionPreset {
+  if (mode === 'ask') return 'read-only';
+  if (mode === 'auto') return 'workspace-write';
+  if (mode === 'bypassPermissions') return 'danger-full-access';
+  throw new Error(`dsh does not support permission mode ${mode}`);
 }
 
 export class DshAgent extends BaseAgent {
@@ -44,7 +70,7 @@ export class DshAgent extends BaseAgent {
   private static baseCapabilities(): Capabilities {
     const unavailable = { supported: false as const, reason: 'not-implemented' as const };
     return {
-      switchModel: unavailable, availableModels: [], hasFastMode: false, effort: unavailable, effortLevels: [], reasoningDisplay: ['full'], permissionModes: [], setPermissionModeMidSession: unavailable,
+      switchModel: unavailable, availableModels: [], hasFastMode: false, effort: { supported: true }, effortLevels: [...DSH_EFFORTS], reasoningDisplay: ['full'], permissionModes: [...DSH_PERMISSION_MODES], setPermissionModeMidSession: { supported: true },
       multimodal: { text: { supported: true }, image: unavailable, file: unavailable }, fork: unavailable, rewind: unavailable, sessionTree: unavailable,
       abort: { supported: true }, sameTurnSteer: unavailable, memory: { supported: unavailable }, extraDirs: unavailable,
     };
@@ -63,6 +89,13 @@ export class DshAgent extends BaseAgent {
     };
     try {
       const model = opts.model || 'deepseek-v4-flash';
+      const permissionPreset = dshPermissionPresetFor(opts.permissionMode ?? 'auto');
+      const agentPreset = vendor.dshAgentPreset;
+      const reasoningEffort = vendor.dshThinkingPolicy
+        ? undefined
+        : opts.effort
+          ? dshReasoningEffortFor(opts.effort)
+          : (vendor.dshReasoningEffort ?? 'high');
       const config = buildDshCordisConfig({
         provider: 'deepseek-official',
         model,
@@ -74,7 +107,7 @@ export class DshAgent extends BaseAgent {
         models: vendor.dshModels,
         ...(vendor.dshThinkingPolicy
           ? { thinkingPolicy: vendor.dshThinkingPolicy }
-          : { reasoningEffort: vendor.dshReasoningEffort ?? 'max' }),
+          : { reasoningEffort }),
       });
       const configYaml = renderDshCordisYaml(config);
       if (opts.remoteHostId) {
@@ -84,7 +117,8 @@ export class DshAgent extends BaseAgent {
         tempDir = await mkdtemp(path.join(os.tmpdir(), 'cindy-dsh-'));
         const configPath = path.join(tempDir, 'cordis.yml');
         await writeFile(configPath, configYaml, 'utf8');
-        await writeFile(path.join(tempDir, 'cindy-dsh-bridge.mjs'), DSH_BRIDGE_SOURCE, 'utf8');
+        const bridgePath = path.join(tempDir, 'cindy-dsh-bridge.mjs');
+        await writeFile(bridgePath, DSH_BRIDGE_SOURCE, 'utf8');
         const localInput = {
           binPath: vendor.dshBinPath ?? this.deps.binaryPath,
           configPath,
@@ -115,7 +149,14 @@ export class DshAgent extends BaseAgent {
         if (notification.method === 'session.event') { const params = notification.params as DshSessionEventNotificationParams; if (params?.event) translateDshEvent(params.event, queue, context); }
         else if (notification.method === 'session.status') { const params = notification.params as DshSessionStatusNotificationParams; if (params?.status === 'running') queue.push({ type: 'status', data: { status: 'Working…', ...context.usage, isRunning: true }, source: 'dsh' }); else if (params?.status === 'idle') settleDshTurnOnIdle(queue, context); }
       } });
-      await proc.request<DshInitializeResult>('initialize', { cwd: opts.workingDir, provider: 'deepseek-official', model });
+      await proc.request<DshInitializeResult>('initialize', {
+        cwd: opts.workingDir,
+        provider: 'deepseek-official',
+        model,
+        permissionPreset,
+        ...(agentPreset ? { agentPreset } : {}),
+        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+      });
       const sessionId = opts.resumeSessionId ?? randomUUID();
       if (opts.resumeSessionId) await proc.request('session/resume', { sessionId });
       const send = async (message: UserMessage, sendOpts?: SendOptions): Promise<void> => {
@@ -133,6 +174,21 @@ export class DshAgent extends BaseAgent {
             logger.warn('dsh cancel RPC failed; terminating process', { message: error instanceof Error ? error.message : String(error) });
             closed = true; await proc.close().catch(() => undefined); await cleanTemp(); queue.end();
           }
+        },
+        async setPermissionMode(mode: PermissionMode) {
+          await proc.request('session/setPermissionPreset', {
+            sessionId,
+            permissionPreset: dshPermissionPresetFor(mode),
+          });
+        },
+        async setEffort(effort: Effort) {
+          if (vendor.dshThinkingPolicy) {
+            throw new Error('this DSH model uses a fixed thinking policy');
+          }
+          await proc.request('session/setEffort', {
+            sessionId,
+            reasoningEffort: dshReasoningEffortFor(effort),
+          });
         },
         async close() {
           if (closed) return;
@@ -163,7 +219,7 @@ export class DshAgent extends BaseAgent {
     }
   }
 }
-function textFromMessage(message: UserMessage): string {
+export function textFromMessage(message: UserMessage): string {
   if (typeof message.content === 'string') return message.content;
   const text: string[] = [];
   for (const block of message.content as UserContentBlock[]) {

@@ -82,10 +82,12 @@ export const PACKAGED_APP_NAME_BY_REGION = Object.freeze({
   dev: 'CindyDev',
 });
 
-export function packagedAppName(region = 'global') {
+export function packagedAppName(region = 'global', desktopVariant = 'stable') {
   const name = PACKAGED_APP_NAME_BY_REGION[region];
   if (!name) throw new Error(`unknown region: ${region}`);
-  return name;
+  if (desktopVariant === 'stable') return name;
+  if (desktopVariant === 'beta') return `${name}Beta`;
+  throw new Error(`unknown desktop variant: ${desktopVariant}`);
 }
 
 /**
@@ -1384,7 +1386,7 @@ export function createMacDMG(appPath, dmgPath, volumeName, identity) {
 
 // ── Smoke test (启动 packaged app) ──────────────────────────────────────────
 
-export function runSmokeTest(platform, arch, region = 'global') {
+export function runSmokeTest(platform, arch, region = 'global', desktopVariant = 'stable') {
   console.log('==> Running packaged smoke test...');
   const result = spawnSync(
     'node',
@@ -1393,7 +1395,10 @@ export function runSmokeTest(platform, arch, region = 'global') {
       `--platform=${platform}`,
       `--arch=${arch}`,
       // 产物基名按区域派生(cn/global 'Cindy' / dev 'CindyDev')。
-      `--app-name=${packagedAppName(region)}`,
+      `--app-name=${packagedAppName(region, desktopVariant)}`,
+      // Beta 与正式版共用 profile，但 Beta 绝不为一个空白 profile 写入 schema。
+      // 它的冒烟场景因此验证“空 profile 被安全拒绝”，而不是要求 Beta 初始化它。
+      ...(desktopVariant === 'beta' ? ['--expect-passive-empty'] : []),
     ],
     { stdio: 'inherit', cwd: DESKTOP_ROOT, shell: false },
   );

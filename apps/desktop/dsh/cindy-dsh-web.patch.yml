@@ -1,0 +1,15 @@
+# Cindy embeds the DSH Web profile in an Electron utility process. The native
+# Windows picker starts its helper with process.execPath, which is electron.exe
+# here (and RunAsNode is deliberately disabled in production). Pin the official
+# in-app browser interaction so workspace selection remains inside DSH and works
+# in both development and packaged builds.
+
+- id: directory-picker
+  disabled: true
+
+- insert:
+    - id: cindy-directory-picker-browse-host
+      name: '@deepseek-ai/dsh-host-directory-picker-browse'
+
+    - id: cindy-directory-picker-browse-client
+      name: '@deepseek-ai/dsh-client-ui-directory-picker-browse'

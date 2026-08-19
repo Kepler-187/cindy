@@ -68,6 +68,8 @@ import { shouldShowNativeFatalDialog, type EnsureReadyErrorCode } from './fatalD
 
 import { createLogger } from '../logger';
 import { recordDesktopDevLocalDbStartupResult } from '../devStartupStatus';
+import { IS_BETA_BUILD } from '../../shared/brandRegion';
+import { shouldUsePassiveSharedUserData } from '../regionUserData';
 
 const log = createLogger('localDb');
 
@@ -149,7 +151,11 @@ export async function ensureReady(userId: string): Promise<EnsureReadyResult> {
   }
 
   const filePath = dbPath(userId);
-  const passiveSharedUserData = !app.isPackaged && process.env.XDT_PASSIVE_SHARED_USER_DATA === '1';
+  const passiveSharedUserData = shouldUsePassiveSharedUserData({
+    isPackaged: app.isPackaged,
+    isBeta: IS_BETA_BUILD,
+    envPassive: process.env.XDT_PASSIVE_SHARED_USER_DATA,
+  });
   // A packaged release may be launched while a shared passive dev instance is still
   // open.  The passive reader lease must continue to block schema writes, but an
   // already-compatible database does not need any startup DDL; let the release use

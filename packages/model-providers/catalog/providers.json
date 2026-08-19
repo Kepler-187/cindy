@@ -439,12 +439,14 @@
               "id": "deepseek-v4-flash",
               "name": "DeepSeek V4 Flash",
               "contextWindow": 1000000,
+              "dshReasoningEfforts": ["low", "high", "max"],
               "dshReasoningEffort": "high"
             },
             {
               "id": "deepseek-v4-pro",
               "name": "DeepSeek V4 Pro",
               "contextWindow": 1000000,
+              "dshReasoningEfforts": ["low", "high", "max"],
               "dshReasoningEffort": "high"
             }
           ]

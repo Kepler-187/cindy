@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import * as fs from 'node:fs';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 
@@ -43,6 +44,7 @@ export interface DshConsoleChild {
 
 export interface DshConsoleProcessDeps {
   cliPath: string;
+  patchPath: string;
   workerPath: string;
   cwd: string;
   env: Record<string, string | undefined>;
@@ -50,7 +52,12 @@ export interface DshConsoleProcessDeps {
     info(message: string, meta?: Record<string, unknown>): void;
     warn(message: string, meta?: Record<string, unknown>): void;
   };
-  spawn?: (workerPath: string, cliPath: string, options: Electron.ForkOptions) => DshConsoleChild;
+  spawn?: (
+    workerPath: string,
+    cliPath: string,
+    patchPath: string,
+    options: Electron.ForkOptions,
+  ) => DshConsoleChild;
   readyTimeoutMs?: number;
   shutdownTimeoutMs?: number;
 }
@@ -96,9 +103,10 @@ function attachLineReader(
 function defaultSpawn(
   workerPath: string,
   cliPath: string,
+  patchPath: string,
   options: Electron.ForkOptions,
 ): DshConsoleChild {
-  return utilityProcess.fork(workerPath, [cliPath], options) as DshConsoleChild;
+  return utilityProcess.fork(workerPath, [cliPath, patchPath], options) as DshConsoleChild;
 }
 
 export class DshConsoleProcess {
@@ -124,14 +132,19 @@ export class DshConsoleProcess {
 
   private start(): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = (this.deps.spawn ?? defaultSpawn)(this.deps.workerPath, this.deps.cliPath, {
-        cwd: this.deps.cwd,
-        env: consoleEnvironment(this.deps.env),
-        execArgv: ['--expose-internals'],
-        stdio: ['ignore', 'pipe', 'pipe'],
-        serviceName: 'cindy-dsh-console',
-        ...(process.platform === 'darwin' ? { disclaim: true } : {}),
-      });
+      const child = (this.deps.spawn ?? defaultSpawn)(
+        this.deps.workerPath,
+        this.deps.cliPath,
+        this.deps.patchPath,
+        {
+          cwd: this.deps.cwd,
+          env: consoleEnvironment(this.deps.env),
+          execArgv: ['--expose-internals'],
+          stdio: ['ignore', 'pipe', 'pipe'],
+          serviceName: 'cindy-dsh-console',
+          ...(process.platform === 'darwin' ? { disclaim: true } : {}),
+        },
+      );
       this.child = child;
 
       const stdout = child.stdout;
@@ -243,4 +256,10 @@ export class DshConsoleProcess {
 export function resolveDshConsoleCliPath(): string {
   const packageJson = runtimeRequire.resolve('@deepseek-ai/dsh/package.json');
   return path.join(path.dirname(packageJson), 'lib', 'bin.js');
+}
+
+export function resolveDshConsolePatchPath(): string {
+  const stagedPath = path.join(__dirname, 'cindy-dsh-web.patch.yml');
+  if (fs.existsSync(stagedPath)) return stagedPath;
+  return path.join(__dirname, '..', '..', 'dsh', 'cindy-dsh-web.patch.yml');
 }

@@ -12,8 +12,10 @@
  */
 
 import {
-  brandAppId,
+  brandAppIdForDesktopVariant,
+  resolveCindyDesktopVariant,
   resolveCindyRegion,
+  type CindyDesktopVariant,
   type CindyRegion,
 } from '@cindy/maker-shared/brand-identity';
 
@@ -22,5 +24,15 @@ export const CURRENT_CINDY_REGION: CindyRegion = resolveCindyRegion(
   import.meta.env?.VITE_CINDY_AUTH_REGION,
 );
 
+/** Stable/Beta changes the OS install identity, never the auth region or profile. */
+export const CURRENT_DESKTOP_VARIANT: CindyDesktopVariant = resolveCindyDesktopVariant(
+  import.meta.env?.VITE_CINDY_DESKTOP_VARIANT,
+);
+export const IS_BETA_BUILD = CURRENT_DESKTOP_VARIANT === 'beta';
+export const CURRENT_DESKTOP_ICON_FILENAME = IS_BETA_BUILD ? 'icon-beta.png' : 'icon.png';
+
 /** 本构建的系统身份 id(Windows AUMID / macOS bundle id)。 */
-export const CURRENT_APP_ID: string = brandAppId(CURRENT_CINDY_REGION);
+export const CURRENT_APP_ID: string = brandAppIdForDesktopVariant(
+  CURRENT_CINDY_REGION,
+  CURRENT_DESKTOP_VARIANT,
+);

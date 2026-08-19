@@ -32,6 +32,7 @@ import { getMobileNotifyGeneration, sendMobileSessionNotify } from './device-lin
 import { latestMessageText } from './localDb/latestMessageText';
 import { drainPersistQueue } from './messagePersistBroadcaster';
 import { createLogger } from './logger';
+import { CURRENT_DESKTOP_ICON_FILENAME } from '../shared/brandRegion';
 import {
   getSessionExternalNotificationText,
   getSessionNotificationBody,
@@ -56,7 +57,7 @@ export function getDesktopNotificationsEnabled(): boolean {
 // 让单条 toast 同时出现两个图标，破坏既定视觉(见下方 buildBody 注释)。
 const devNotificationIcon = !app.isPackaged
   ? (() => {
-      const p = path.join(__dirname, '../../resources/icon.png');
+      const p = path.join(__dirname, '../../resources', CURRENT_DESKTOP_ICON_FILENAME);
       const img = nativeImage.createFromPath(p);
       return img.isEmpty() ? undefined : img;
     })()

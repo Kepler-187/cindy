@@ -16,6 +16,7 @@
  */
 
 import { BrowserWindow, app, nativeTheme, screen, shell } from 'electron';
+import { CURRENT_DESKTOP_ICON_FILENAME } from '../shared/brandRegion.js';
 import path from 'node:path';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
@@ -125,8 +126,8 @@ export function openSessionInNewWindow(
     minHeight: 600,
     title: BRAND_NAME,
     icon: app.isPackaged
-      ? path.join(process.resourcesPath, 'icon.png')
-      : path.join(__dirname, '../../resources/icon.png'),
+      ? path.join(process.resourcesPath, CURRENT_DESKTOP_ICON_FILENAME)
+      : path.join(__dirname, '../../resources', CURRENT_DESKTOP_ICON_FILENAME),
     autoHideMenuBar: true,
     show: false,
     backgroundColor: bgColor,

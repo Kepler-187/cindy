@@ -27,6 +27,16 @@ Cindy 的长期职责是 DSH 的呈现与双向传输入口，DSH 自己拥有�
 `packages/maker-core/src/agents/dsh/composition.ts` 仍由 Cindy 生成一部分 Cordis boot graph，这是已知的
 过渡偏差：后续只能收缩并迁回 DSH 所有的 package/契约，不能继续在 Cindy 侧扩展 DSH 内部流程。
 
+### 控制台、模式与远程会话
+
+- Desktop 控制台使用官方 `dsh web` profile，在 Cindy 保留左侧栏的主工作区内嵌展示。Main 按需以
+  `utilityProcess` 启动、复用并在退出时回收该进程；它只接受严格的 loopback URL，锁定顶层导航并拒绝弹窗。
+- 可选 DSH 模式由官方 profile 的 `agentPreset.list` 在运行时投影，而不是由 Cindy 写死。进入本地
+  DSH composer 时为取得列表可以启动或复用控制台进程；SSH / 设备远程会话不能读取或发送本机列表，使用
+  远端 DSH 的默认模式。
+- SSH transport 部署并执行与本地相同的 Cindy launcher，使用远端自身 `~/.dsh`（或远端设置的
+  `DSH_HOME`）中的 patch 与 settings。用户插件和设置不会由 Cindy 在本地与远端之间同步。
+
 ## 自定义来源配置
 
 在设置的自定义供应商编辑页选择 **DSH** runtime。该 runtime 必须使用 **API 密钥**鉴权，可配置的

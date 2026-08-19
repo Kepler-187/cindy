@@ -56,6 +56,19 @@ export interface DshInitializeParams {
   provider: string;
   model: string;
   maxTokens?: number;
+  permissionPreset: DshPermissionPreset;
+  /** Omitted to let the active DSH runtime/plugin graph choose its default preset. */
+  agentPreset?: string;
+  reasoningEffort?: DshReasoningEffort;
+}
+
+export type DshPermissionPreset = 'read-only' | 'workspace-write' | 'danger-full-access';
+export interface DshAgentPresetDescriptor {
+  id: string;
+  name?: string;
+  description?: string;
+  trust: 'system' | 'user';
+  broken?: string;
 }
 
 export interface DshServerInfo {
@@ -82,6 +95,20 @@ export interface DshSessionResumeParams { sessionId: string; }
 export interface DshSessionResumeResult { sessionId: string; }
 export interface DshSessionCancelParams { sessionId: string; keepInbox?: boolean; }
 export interface DshSessionCancelResult { accepted: boolean; wasRunning: boolean; }
+export interface DshSessionSetPermissionPresetParams {
+  sessionId: string;
+  permissionPreset: DshPermissionPreset;
+}
+export interface DshSessionSetPermissionPresetResult {
+  permissionPreset: DshPermissionPreset;
+}
+export interface DshSessionSetEffortParams {
+  sessionId: string;
+  reasoningEffort: Exclude<DshReasoningEffort, 'off'>;
+}
+export interface DshSessionSetEffortResult {
+  reasoningEffort: Exclude<DshReasoningEffort, 'off'>;
+}
 
 // ---------------------------------------------------------------------------
 // 会话级通知

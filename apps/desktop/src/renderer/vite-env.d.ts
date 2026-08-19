@@ -2,6 +2,7 @@
 
 interface ImportMetaEnv {
   readonly VITE_CINDY_AUTH_REGION: 'cn' | 'global' | 'dev';
+  readonly VITE_CINDY_DESKTOP_VARIANT?: 'stable' | 'beta';
   /** 当前构建区域的端点清单自举基址；业务端点走 electronAPI.clientEndpoints。 */
   readonly VITE_ENDPOINT_MANIFEST_BASE_URL: string;
   /** 另一物理区域的受信任端点清单自举基址。 */
@@ -2566,6 +2567,7 @@ interface ElectronAPI {
   openExternal: (url: string) => Promise<{ success: boolean }>;
   openChatGPTApp: () => Promise<{ success: boolean }>;
   openDshConsole: (webContentsId: number) => Promise<{ url: string }>;
+  listDshAgentPresets: () => Promise<import('../shared/dshConsole').DshAgentPresetsListResult>;
 
   // 绝对路径或完整本地 file:// URL;URL 形态用于保留 query/hash 页面状态。
   openFileInBrowser: (filePathOrUrl: string) => Promise<{ success: true }>;

@@ -1,7 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { MobileCodexRateLimitsResult } from '@cindy/maker-shared/device-link-contract';
 import type { AppearanceSettings } from '../shared/appearanceSettings';
-import { DSH_CONSOLE_OPEN_CHANNEL, type DshConsoleOpenResult } from '../shared/dshConsole';
+import {
+  DSH_AGENT_PRESETS_LIST_CHANNEL,
+  DSH_CONSOLE_OPEN_CHANNEL,
+  type DshAgentPresetsListResult,
+  type DshConsoleOpenResult,
+} from '../shared/dshConsole';
 import type { SessionDragPreviewPalette } from '../shared/sessionDragPreview';
 import {
   AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL,
@@ -3151,6 +3156,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
    */
   openDshConsole: (webContentsId: number): Promise<DshConsoleOpenResult> =>
     ipcRenderer.invoke(DSH_CONSOLE_OPEN_CHANNEL, webContentsId),
+  listDshAgentPresets: (): Promise<DshAgentPresetsListResult> =>
+    ipcRenderer.invoke(DSH_AGENT_PRESETS_LIST_CHANNEL),
 
   // file-chip 传绝对路径;内置浏览器传完整本地 file:// URL 以保留 query/hash。
   // main 端统一解析并做扩展名白名单与 isPathAllowed 安全校验。

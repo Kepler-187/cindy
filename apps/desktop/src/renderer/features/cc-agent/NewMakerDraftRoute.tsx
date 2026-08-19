@@ -2375,6 +2375,15 @@ export function NewMakerDraftRoute() {
     patchCurrentVendorPrefs(patch);
   }, []);
 
+  const dshAgentPreset = draft.lastByVendor.dsh.dshAgentPreset;
+  const handleDshAgentPresetChange = useCallback(
+    (presetId: string) => {
+      if (isDeviceLinkDraft) return;
+      patchActivePrefs({ dshAgentPreset: presetId });
+    },
+    [isDeviceLinkDraft, patchActivePrefs],
+  );
+
   const handleModelDidChange = useCallback(
     (newModelId: string) => {
       if (isDeviceLinkDraft) {
@@ -3361,6 +3370,10 @@ export function NewMakerDraftRoute() {
           const sessionId = makeDraftSessionId();
           const workingDir = selectedWorkingDir;
           const wt = selectedWorktree;
+          const dshVendorOptions =
+            persistedAgentKind === 'dsh' && !isRemoteProjectDraft && dshAgentPreset
+              ? { dshAgentPreset }
+              : undefined;
           // 生效条件 = 勾选 && baseRepo 已就绪。上面的发送门已阻止不完整状态；
           // 这里保留完整条件作创建副作用前的防御，且始终不改写勾选记忆。
           if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo) {
@@ -3560,6 +3573,7 @@ export function NewMakerDraftRoute() {
                   rehomedFiles,
                   mentions,
                   {
+                    ...(dshVendorOptions ? { vendorOptions: dshVendorOptions } : {}),
                     ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
                     ...(opts?.agentReferences?.length
                       ? { agentReferences: opts.agentReferences }
@@ -3693,6 +3707,7 @@ export function NewMakerDraftRoute() {
             text: message,
             files: rehydratedFiles,
             mentions,
+            ...(dshVendorOptions ? { vendorOptions: dshVendorOptions } : {}),
             ...(opts?.quotesEncoded ? { quotesEncoded: true } : {}),
             ...(opts?.agentReferences?.length ? { agentReferences: opts.agentReferences } : {}),
             ...(opts?.pastedTextRanges?.length ? { pastedTextRanges: opts.pastedTextRanges } : {}),
@@ -3754,6 +3769,7 @@ export function NewMakerDraftRoute() {
       effectiveExtraDirs,
       authVendor,
       persistedAgentKind,
+      dshAgentPreset,
       effectiveFastMode,
       // 计划模式一次性开关: handleSend 内读取 + 消耗(patchActivePrefs 清勾选),
       // 漏在依赖里会让"切换后立即发送"用到旧值(bot review P2)。
@@ -4633,6 +4649,12 @@ export function NewMakerDraftRoute() {
                     onPermissionModeDidChange={handlePermissionModeDidChange}
                     onProviderDidChange={handleProviderDidChange}
                     vendorKey={normalizeDbAgentKind(draft.vendor)}
+                    dshAgentPreset={dshAgentPreset}
+                    onDshAgentPresetChange={
+                      draft.vendor === 'dsh' && !isRemoteProjectDraft
+                        ? handleDshAgentPresetChange
+                        : undefined
+                    }
                     folderPickerOpen={folderPickerOpen}
                     onFolderPickerOpenChange={handleFolderPickerOpenChange}
                     showFolderPicker={false}

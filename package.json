@@ -106,6 +106,7 @@
     "demo:legacy-migration": "tsx scripts/dev-legacy-migration-demo.mts",
     "build": "node scripts/ensure-deps.mjs && pnpm --filter desktop build",
     "release:package": "node scripts/ensure-deps.mjs && node apps/desktop/scripts/package-desktop.mjs",
+    "release:package:beta:cn": "pnpm release:package -- --region cn --beta",
     "check:i18n": "node scripts/check-i18n.mjs",
     "check:i18n-glossary": "node scripts/check-i18n-glossary.mjs",
     "check:i18n-glossary:report": "node scripts/check-i18n-glossary.mjs --report",

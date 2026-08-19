@@ -33,10 +33,17 @@ describe('createSshDshTransport', () => {
     const transport = await createSshDshTransport({
       remoteHost: { id: 'host-1', execStream } as unknown as RemoteHost,
       workingDir: '/repo', configYaml: 'config: true\n', bridgeSource: 'export {};\n',
+      launcherSource: 'export {};\n',
       apiKey: 'not-logged-key', sessionRoot: '$HOME/.xdt-server/v1/dsh-sessions', logger,
     });
-    expect(execStream.mock.calls[0][0]).toContain('packaged-bin.js');
-    expect(channel.writes).toHaveLength(5);
+    const command = String(execStream.mock.calls[0][0]);
+    expect(command).toContain('cindy-dsh-bin.mjs');
+    expect(command).toContain('DSH_HOME');
+    expect(command).toContain('session root must be absolute or start with $HOME/');
+    expect(command).not.toContain('eval ');
+    expect(command).not.toContain('packaged-bin.js');
+    expect(channel.writes).toHaveLength(6);
+    expect(Buffer.from(channel.writes[2].trim(), 'base64').toString('utf8')).toBe('export {};\n');
     expect(channel.writes.join('')).not.toContain('not-logged-key');
     const lines: string[] = [];
     transport.onLine((line) => lines.push(line));

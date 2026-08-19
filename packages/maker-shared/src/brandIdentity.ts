@@ -47,6 +47,16 @@ import { BRAND_NAME } from './branding.js';
  */
 export type CindyRegion = 'cn' | 'global' | 'dev';
 
+/** Desktop packaging identity is orthogonal to auth region and data ownership. */
+export type CindyDesktopVariant = 'stable' | 'beta';
+
+export function resolveCindyDesktopVariant(raw?: string | null): CindyDesktopVariant {
+  const value = raw?.trim().toLowerCase();
+  if (!value || value === 'stable') return 'stable';
+  if (value === 'beta') return 'beta';
+  throw new Error(`Invalid Cindy desktop variant: ${raw}; expected stable or beta`);
+}
+
 /** 默认区域:Global。开发模式 / 未显式注入区域的构建一律落在这里。 */
 export const DEFAULT_CINDY_REGION: CindyRegion = 'global';
 
@@ -195,6 +205,16 @@ export function brandAppId(
   return identity.appIdByRegion[region];
 }
 
+/** Beta has an independent OS/install identity while retaining the same region. */
+export function brandAppIdForDesktopVariant(
+  region: CindyRegion = DEFAULT_CINDY_REGION,
+  variant: CindyDesktopVariant = 'stable',
+  identity: BrandIdentity = BRAND_IDENTITY,
+): string {
+  const appId = brandAppId(region, identity);
+  return variant === 'beta' ? `${appId}.beta` : appId;
+}
+
 /** 自有 UTI / ProgId 等派生标识的前缀(如 `<prefix>.cindy` UTI),随区域 appId 走。 */
 export function brandBundleIdPrefix(
   region: CindyRegion = DEFAULT_CINDY_REGION,
@@ -209,6 +229,15 @@ export function brandExecutableName(
   identity: BrandIdentity = BRAND_IDENTITY,
 ): string {
   return identity.executableNameByRegion[region];
+}
+
+export function brandExecutableNameForDesktopVariant(
+  region: CindyRegion = DEFAULT_CINDY_REGION,
+  variant: CindyDesktopVariant = 'stable',
+  identity: BrandIdentity = BRAND_IDENTITY,
+): string {
+  const executableName = brandExecutableName(region, identity);
+  return variant === 'beta' ? `${executableName}Beta` : executableName;
 }
 
 /** 按区域取 Electron userData 目录名;默认 global。 */

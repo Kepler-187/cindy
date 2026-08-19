@@ -40,7 +40,11 @@ import {
 import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
 import { handleOpenChatGPTApp } from './chatgpt-app.js';
 import { registerDshConsoleIpc } from './maker-host/dsh-console-ipc.js';
-import { DshConsoleProcess, resolveDshConsoleCliPath } from './maker-host/dsh-console-process.js';
+import {
+  DshConsoleProcess,
+  resolveDshConsoleCliPath,
+  resolveDshConsolePatchPath,
+} from './maker-host/dsh-console-process.js';
 import {
   waitForTurnChangeSetActions,
   waitForTurnChangeSetPersistence,
@@ -684,7 +688,12 @@ import {
 } from './deepLink.js';
 import { registerFolderContextMenu } from './folderContextMenu.js';
 import { healWindowsShortcuts } from './windowsShortcutSelfHeal.js';
-import { CURRENT_APP_ID, CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
+import {
+  CURRENT_APP_ID,
+  CURRENT_CINDY_REGION,
+  CURRENT_DESKTOP_ICON_FILENAME,
+  IS_BETA_BUILD,
+} from '../shared/brandRegion.js';
 import {
   readWindowBehaviorSettings,
   writeSwallowActivationClick,
@@ -1122,6 +1131,7 @@ const voicePowerBroadcastLog = createLogger('voice-input-power');
 const sessionDragPreviewLog = createLogger('session-drag-preview');
 const dshConsoleProcess = new DshConsoleProcess({
   cliPath: resolveDshConsoleCliPath(),
+  patchPath: resolveDshConsolePatchPath(),
   workerPath: path.join(__dirname, 'dshConsoleWorkerProcess.js'),
   cwd: os.homedir(),
   env: process.env,
@@ -2400,8 +2410,8 @@ function ensureWindowsTray(): boolean {
   let tray: Tray | null = null;
   try {
     const iconPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'icon.png')
-      : path.join(__dirname, '../../resources/icon.png');
+      ? path.join(process.resourcesPath, CURRENT_DESKTOP_ICON_FILENAME)
+      : path.join(__dirname, '../../resources', CURRENT_DESKTOP_ICON_FILENAME);
     const icon = nativeImage.createFromPath(iconPath);
     if (icon.isEmpty()) throw new Error(`tray icon is empty: ${iconPath}`);
     tray = new Tray(icon.resize({ width: 16, height: 16 }));
@@ -2657,7 +2667,7 @@ function applyPageZoomLevel(mainWindow: BrowserWindow, nextFactor: number): numb
 //     写注册表 / .desktop entry; macOS 走 Info.plist, 此调用是兜底)
 //   - app.on('open-url') 是 macOS-only 事件, 冷启动时也会在 ready 之前 fire,
 //     提前 attach 才能接住
-registerDeepLinkProtocol();
+if (!IS_BETA_BUILD) registerDeepLinkProtocol();
 app.on('open-url', (event, url) => {
   event.preventDefault();
   handleIncomingDeepLink(url, 'open-url');
@@ -2816,12 +2826,12 @@ if (process.platform !== 'darwin') {
 // (gotTheLock=false)仍会执行到这里——三个自愈都是幂等 + 全吞错,重复执行无害,
 // 不为此加门控。
 if (app.isPackaged) {
-  void registerFolderContextMenu();
+  if (!IS_BETA_BUILD) void registerFolderContextMenu();
   // Windows .cindy 文件关联自注册(双击装入意识)。同款 best-effort 口径。
-  registerCindyFileAssociation();
+  if (!IS_BETA_BUILD) registerCindyFileAssociation();
   // 品牌改名快捷方式自愈(XDMaker.lnk → Cindy.lnk;差量更新不重跑安装器,
   // 存量用户靠这里换名)。同款 best-effort 口径,详见模块头注释。
-  void healWindowsShortcuts();
+  if (!IS_BETA_BUILD) void healWindowsShortcuts();
 }
 
 const createWindow = () => {
@@ -2875,8 +2885,8 @@ const createWindow = () => {
     minHeight: 600,
     title: BRAND_NAME,
     icon: app.isPackaged
-      ? path.join(process.resourcesPath, 'icon.png')
-      : path.join(__dirname, '../../resources/icon.png'),
+      ? path.join(process.resourcesPath, CURRENT_DESKTOP_ICON_FILENAME)
+      : path.join(__dirname, '../../resources', CURRENT_DESKTOP_ICON_FILENAME),
     autoHideMenuBar: true,
     show: false,
     backgroundColor: bgColor,
@@ -6754,7 +6764,8 @@ app.on('ready', async () => {
   // setIcon 会原样显示资源，不会替应用图标自动加圆角。
   if (!app.isPackaged && process.platform === 'darwin') {
     try {
-      app.dock?.setIcon(path.join(__dirname, '../../resources/icon-dock.png'));
+      const dockIcon = IS_BETA_BUILD ? 'icon-beta-dock.png' : 'icon-dock.png';
+      app.dock?.setIcon(path.join(__dirname, '../../resources', dockIcon));
     } catch (err) {
       // 仅影响 dev Dock 观感,失败不挡启动
       createLogger('dock-icon').warn('setIcon failed', { error: String(err) });

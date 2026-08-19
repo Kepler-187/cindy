@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
   DshAgent,
@@ -26,21 +26,26 @@ const logger: AgentDeps['logger'] = {
   },
 };
 
+const desktopRoot = fileURLToPath(new URL('../../../../', import.meta.url));
+const repoRoot = path.resolve(desktopRoot, '..', '..');
+
 function dshLauncher(): string {
-  return path.resolve(process.cwd(), 'dsh', 'cindy-dsh-bin.mjs');
+  return path.resolve(desktopRoot, 'dsh', 'cindy-dsh-bin.mjs');
 }
 
 function dshWebCli(): string {
   return path.resolve(
-    process.cwd(),
-    '..',
-    '..',
+    repoRoot,
     'node_modules',
     '@deepseek-ai',
     'dsh',
     'lib',
     'bin.js',
   );
+}
+
+function dshWebPatch(): string {
+  return path.resolve(desktopRoot, 'dsh', 'cindy-dsh-web.patch.yml');
 }
 
 function restoreEnv(name: string, value: string | undefined): void {
@@ -103,9 +108,19 @@ async function startDshWeb(dshHome: string): Promise<{
 }> {
   const child = spawn(
     process.execPath,
-    ['--expose-internals', dshWebCli(), 'web', '--host', '127.0.0.1', '--port', '0'],
+    [
+      '--expose-internals',
+      dshWebCli(),
+      'web',
+      '--patch',
+      dshWebPatch(),
+      '--host',
+      '127.0.0.1',
+      '--port',
+      '0',
+    ],
     {
-      cwd: process.cwd(),
+      cwd: desktopRoot,
       env: { ...process.env, DSH_HOME: dshHome },
       stdio: ['pipe', 'pipe', 'pipe'],
     },
@@ -218,9 +233,7 @@ describe('DSH Harness integration (bundled runtime + fake DeepSeek stream)', () 
       const pluginPath = path.join(tempRoot, 'user-marker.mjs');
       const dshSettingsUrl = pathToFileURL(
         path.resolve(
-          process.cwd(),
-          '..',
-          '..',
+          repoRoot,
           'node_modules',
           '@deepseek-ai',
           'dsh-settings',
@@ -230,9 +243,7 @@ describe('DSH Harness integration (bundled runtime + fake DeepSeek stream)', () 
       ).href;
       const schemasteryUrl = pathToFileURL(
         path.resolve(
-          process.cwd(),
-          '..',
-          '..',
+          repoRoot,
           'node_modules',
           '@deepseek-ai',
           'schemastery',
@@ -331,6 +342,26 @@ describe('DSH Harness integration (bundled runtime + fake DeepSeek stream)', () 
             fiberPhase: 'active',
           }),
         );
+        expect(inventory.entries).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              entryId: 'include:cindy-directory-picker-browse-host',
+              enabled: true,
+              fiberPhase: 'active',
+            }),
+            expect.objectContaining({
+              entryId: 'include:cindy-directory-picker-browse-client',
+              enabled: true,
+              fiberPhase: 'active',
+            }),
+          ]),
+        );
+        const directoryListing = await callDshWebApi<{
+          path: string;
+          entries: Array<{ name: string; path: string }>;
+        }>(web.url, 'host.listDirectory', { path: workingDir });
+        expect(directoryListing.path).toBe(workingDir);
+        expect(Array.isArray(directoryListing.entries)).toBe(true);
 
         await callDshWebApi(web.url, 'settings.mutate', {
           ns: 'cindy-integration',

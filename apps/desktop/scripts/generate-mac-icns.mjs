@@ -179,7 +179,9 @@ async function main() {
   console.log(`[generate-mac-icns] wrote ${outPath} (${sizeKb} KB, ${chunks.length} chunks)`);
 
   // 3. dev Dock 用的平铺 PNG(见文件顶注)
-  const dockPngPath = path.join(path.dirname(outPath), 'icon-dock.png');
+  const outBase = path.basename(outPath, path.extname(outPath));
+  const dockPngName = outBase === 'icon' ? 'icon-dock.png' : `${outBase}-dock.png`;
+  const dockPngPath = path.join(path.dirname(outPath), dockPngName);
   fs.writeFileSync(dockPngPath, await sizePng(512));
   console.log(`[generate-mac-icns] wrote ${dockPngPath}`);
 }

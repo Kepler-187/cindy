@@ -20,6 +20,8 @@
 //                                   win32 仅 x64)
 //   --region   cn|global|dev        版本无关包默认 global；传 --version 时必填，
 //                                   决定应用身份、端点清单与发布目标
+//   --beta                            独立安装入口，读取同区域正式版数据；
+//                                     固定版本无关，不参与自动更新
 //   --version  x.y.z|major|minor|patch
 //              缺省 = 版本无关打包:占位版本 0.0.0,包不参与热更新
 //              (updateService 对 0.0.0 短路),开源社区拉仓即可打;
@@ -146,7 +148,7 @@ function cleanOutDir() {
   }
 }
 
-function runForgeMake({ platform, arch, region, version, versionless, noSign, webAuthnAppleTeamId }) {
+function runForgeMake({ platform, arch, region, desktopVariant, version, versionless, noSign, webAuthnAppleTeamId }) {
   console.log('==> Building remote bundles...');
   execSync('node scripts/build-remote-bundles.mjs', { cwd: DESKTOP_ROOT, stdio: 'inherit' });
 
@@ -167,6 +169,8 @@ function runForgeMake({ platform, arch, region, version, versionless, noSign, we
     ...desktopLogUploadBuildEnv({ authRegion: region, allowMissing: versionless }),
     // forge.config.ts 的 NSIS appId / AUMID 优先读这个(与 VITE_ 同源,双保险)。
     CINDY_AUTH_REGION: region,
+    CINDY_DESKTOP_VARIANT: desktopVariant,
+    VITE_CINDY_DESKTOP_VARIANT: desktopVariant,
     // forge.config.ts 注入 packagerConfig.appVersion;版本无关时为占位 0.0.0。
     APP_VERSION: version,
     // 只给最终会做 Developer ID 签名的 macOS bundle 烘焙 Team ID。ad-hoc、
@@ -520,7 +524,16 @@ async function main() {
     console.error(`ERROR: ${err.message}`);
     process.exit(1);
   }
-  const { platform, archs, region, versionSpec, skipSmoke, allowUnsigned, noSign } = args;
+  const {
+    platform,
+    archs,
+    region,
+    desktopVariant,
+    versionSpec,
+    skipSmoke,
+    allowUnsigned,
+    noSign,
+  } = args;
   // ensureBinary 的 CDN fallback 按此 region 选择清单基址；必须早于二进制准备。
   process.env.CINDY_AUTH_REGION = region;
   // mac 签名身份按区域从 release-regions.json 注入(文件缺失时静默跳过,
@@ -567,6 +580,7 @@ async function main() {
   console.log(`==> Package Cindy desktop`);
   console.log(`    platform: ${archs.map((a) => `${platform}-${a}`).join(' + ')}`);
   console.log(`    region:   ${region}`);
+  console.log(`    variant:  ${desktopVariant}`);
   console.log(`    version:  ${versionless ? `(版本无关,占位 ${version},不参与热更新)` : version}`);
   console.log('='.repeat(60));
 
@@ -597,8 +611,8 @@ async function main() {
 
   // 产物基名按区域派生(cn/global 'Cindy' / dev 'CindyDev',out 目录 / exe /
   // .app 同名;forge.config 的 packagerConfig.name 同源)。
-  const appName = packagedAppName(region);
-  const baseName = artifactBaseName({ version, versionless });
+  const appName = packagedAppName(region, desktopVariant);
+  const baseName = artifactBaseName({ version, versionless, desktopVariant });
   const finishers = { win32: finishWindows, darwin: finishDarwin, linux: finishLinux };
   const meta = collectBuildMeta();
   const results = [];
@@ -612,7 +626,7 @@ async function main() {
     // build-info.json / 安装包(看起来像可发布结果,易被人工分发或发布侧误取)。
     const artifactDir = path.join(
       RELEASE_DIR,
-      ...artifactRelDir({ region, version, versionless, platformKey }).split('/'),
+      ...artifactRelDir({ region, version, versionless, platformKey, desktopVariant }).split('/'),
     );
     fs.rmSync(artifactDir, { recursive: true, force: true });
 
@@ -621,6 +635,7 @@ async function main() {
       platform,
       arch,
       region,
+      desktopVariant,
       version,
       versionless,
       noSign,
@@ -642,7 +657,7 @@ async function main() {
       verifyMacBinaryArch(appName, arch);
       console.log('==> Skipping smoke: arm64 artifact not runnable on Intel host (binary arch verified)');
     } else {
-      runSmokeTest(platform, arch, region);
+      runSmokeTest(platform, arch, region, desktopVariant);
     }
 
     // 产物目录(本轮开始前已清空)
@@ -669,6 +684,7 @@ async function main() {
         version,
         versionless,
         region,
+        desktopVariant,
         platform,
         arch,
         commitSha: meta.commitSha,

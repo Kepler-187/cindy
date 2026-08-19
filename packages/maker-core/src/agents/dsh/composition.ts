@@ -3,7 +3,36 @@ import type { DshCompositionOptions, DshCordisConfig } from './protocol.js';
 type JsExpression = { readonly expression: string };
 const js = (expression: string): JsExpression => ({ expression });
 
-/** Builds the known-good dsh plugin graph; secrets intentionally stay in process env. */
+const DSH_PRESET_AGENT_ROWS = [
+  'tool-bash',
+  'tool-pwsh',
+  'tool-jobs',
+  'tool-fs',
+  'tool-fs-search',
+  'tool-str-replace-editor',
+  'skill-filesystem',
+  'tool-skill',
+  'tool-goal',
+  'plan-mode',
+  'compaction-basic',
+  'command-compact',
+  'tool-result-pruner',
+  'tool-subagent-control',
+  'tool-subagent-list-agents',
+  'tool-subagent',
+  'tool-subagent-fork',
+  'workflow-worker-thread',
+  'tool-workflow',
+  'tool-ralph',
+  'agent-instructions',
+  'tool-todo',
+  'tool-web',
+] as const;
+
+/**
+ * Builds Cindy's overlay over the DSH-owned base bundle. Secrets stay in env;
+ * DSH owns the sandbox, approval stack, tools, and per-session preset graph.
+ */
 export function buildDshCordisConfig(options: DshCompositionOptions): DshCordisConfig {
   if (options.provider !== 'deepseek-official') throw new Error(`dsh only supports provider deepseek-official (got ${options.provider})`);
   if (options.apiKeyEnv !== 'DEEPSEEK_API_KEY') throw new Error('dsh deepseek adapter requires DEEPSEEK_API_KEY');
@@ -33,22 +62,40 @@ export function buildDshCordisConfig(options: DshCompositionOptions): DshCordisC
       : {}),
   };
   const config: unknown[] = [
-    { id: 'cindy-dsh-bridge', name: './cindy-dsh-bridge.mjs' },
-    { id: 'llm-deepseek', name: '@deepseek-ai/dsh-llm-deepseek', config: deepseekConfig },
-    { id: 'subprocess', name: '@deepseek-ai/dsh-subprocess-local' },
-    ...(options.bashLocal !== false ? [{ id: 'bash', name: '@deepseek-ai/dsh-bash-local', config: { cwd: js('process.env.DSH_CWD ?? process.cwd()'), timeoutMs: 60000 } }] : []),
-    { id: 'agent-spine', name: '@deepseek-ai/dsh-agent-spine-demo', config: { persona: js("process.env.DSH_SYSTEM_PROMPT ?? 'You are a coding agent.'"), workspaceContext: false, skills: { enabled: false }, toolBash: { enableRunInBackground: false }, toolJobs: false } },
-    { id: 'sessions', name: '@deepseek-ai/dsh-session-persistence-jsonl', config: { root: js("process.env.DSH_SESSION_ROOT ?? './.sessions'"), compression: js("process.env.DSH_SNAPSHOT === undefined ? 'zstd' : 'none'") } },
-    { id: 'session-checkpoints', name: '@deepseek-ai/dsh-session-checkpoint-policy' },
-    { id: 'subagent', name: '@deepseek-ai/dsh-subagent' },
-    { id: 'subagent-spawn-in-process', name: '@deepseek-ai/dsh-subagent-spawn-in-process', config: { providerName: 'spawn' } },
-    { id: 'tool-subagent', name: '@deepseek-ai/dsh-tool-subagent', config: { provider: 'spawn', toolName: 'subagent', enableRunInBackground: false } },
-    { id: 'tool-todo', name: '@deepseek-ai/dsh-tool-todo', config: { allowParallelInProgress: true } },
-    { id: 'fs-local', name: '@deepseek-ai/dsh-fs-local', config: { cwd: js('process.env.DSH_CWD ?? process.cwd()') } },
-    { id: 'fs-observation-policy', name: '@deepseek-ai/dsh-fs-observation-policy' },
-    { id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs' },
-    { id: 'token-meter', name: '@deepseek-ai/dsh-token-meter' },
-    { id: 'compaction-basic', name: '@deepseek-ai/dsh-compaction-basic', config: { thresholdRatio: 0.8, retainRatio: 0.16, maxTokens: 8192, compactionRetries: 1 } },
+    { id: 'hmr', disabled: true },
+    { id: 'session-telemetry-otel', disabled: true },
+    { id: 'session-title-llm', disabled: true },
+    {
+      id: 'agent-default-model',
+      config: { provider: options.provider, model: options.model },
+    },
+    { id: 'llm-deepseek', config: deepseekConfig },
+    {
+      id: 'session-persistence-jsonl',
+      config: {
+        root: js("process.env.DSH_SESSION_ROOT ?? './.sessions'"),
+        compression: js("process.env.DSH_SNAPSHOT === undefined ? 'zstd' : 'none'"),
+      },
+    },
+    {
+      id: 'sandbox-policy',
+      config: {
+        mode: 'workspace-write',
+        workspaceRoot: js('process.env.DSH_CWD ?? process.cwd()'),
+      },
+    },
+    { id: 'approval', config: { policy: 'ask' } },
+    ...DSH_PRESET_AGENT_ROWS.map((id) => ({ id, disabled: true })),
+    {
+      insert: [
+        { id: 'code-runtime', name: '@deepseek-ai/dsh-code-runtime-worker-thread' },
+        {
+          id: 'agent-presets',
+          name: '@deepseek-ai/dsh-agent-presets',
+        },
+        { id: 'cindy-dsh-bridge', name: './cindy-dsh-bridge.mjs' },
+      ],
+    },
   ];
   // DshCordisConfig's index signature models individual YAML nodes; the root is a list.
   return config as unknown as DshCordisConfig;

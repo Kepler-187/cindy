@@ -1,16 +1,18 @@
 # DSH Web 控制台嵌入与配置共享实现方案
 
 更新日期：2026-08-19
-状态：功能已实现并通过开发版端到端验收；Windows 正式包生成尚未完成，当前机器缺少仓库
-强制要求的 Rust/Cargo，Forge 在编译 `cindy-updater` 前置钩子 fail-loud，未绕过该门禁。
+状态：本地核心链、开发版端到端验收与 SSH 启动链已完成并通过定向单测。Windows x64
+Beta 安装包已生成；随包数据库初始化、DSH launcher/runtime 闭包与 Electron 启动 smoke
+均通过。Beta 使用独立安装入口和图标，但与同区域正式版共享用户数据并保持互斥运行。
 
 ## 0. 实现结果（后续章节冲突时以本节为准）
 
 2026-08-19 最终实现沿用了方案的产品目标，但在读取 rc.7 官方 CLI 后收缩了控制台 boot：
 
-- 对话侧由 `apps/desktop/dsh/cindy-dsh-bin.mjs` 保留 packaged-bin 契约，先插入
-  `dsh-settings-file`，再读取同一 `DSH_HOME/cordis.patch.yml`；Main 显式把 `DSH_HOME`
-  传给本地 transport。
+- 对话侧由 `apps/desktop/dsh/cindy-dsh-bin.mjs` 保留 packaged-bin 契约，组成顺序为
+  `official dsh-base → DSH_HOME/cordis.patch.yml → Cindy 宿主 overlay → 派生 preset root`；
+  Main 显式把 `DSH_HOME` 传给本地 transport。用户 patch 可扩展 DSH，但不能覆盖 Cindy
+  后置的凭证、沙箱、权限和桥接边界。
 - 控制台不再自行组装 `console-cordis.yml`，也没有平行的 console launcher。它直接用
   官方 `@deepseek-ai/dsh` CLI 执行 `dsh web --host 127.0.0.1 --port 0`；官方 web profile
   已包含 webserver、frontend、connection、settings、inventory 和设置 UI，并原生消费
@@ -26,6 +28,12 @@
   热更新，随后文本对话仍正常完成。坏 patch/坏 settings 均 fail-loud。
 - `dsh-test` 实机已验证首次点击启动、再次进入复用、主动终止控制台子进程后点击自动恢复、
   页面完整占用 Cindy 主工作区、跨 origin 导航被阻止且 `window.open` 被拒绝。
+- DSH 模式由 official Web profile 的 `agentPreset.list` 动态投影；因此进入本地 DSH
+  composer 时也可能为读取模式清单而启动/复用同一控制台进程，不再承诺“只有打开控制台
+  页面才启动”。SSH/设备远程不使用本机清单，当前让远端 DSH 采用自己的默认模式。
+- SSH transport 上传并执行同一 Cindy launcher，读取远端自己的 `~/.dsh` patch/settings，
+  安全展开 `$HOME` 会话目录；远端 runtime 缓存按精确依赖闭包指纹失效，不再只看 rc 版本号。
+- text-only 由 UI、capabilities 与 adapter 三层收口；image/file block 在 DSH 请求前被拒绝。
 
 原方案 §2—§11 保留为设计过程与取舍记录，其中“自组控制台清单”“先系统浏览器后
 WebView”“控制台用端口文件上报”等内容已被上述官方 profile 路径取代。
@@ -380,15 +388,16 @@ A 作为体验升级紧随其后；B 留作安全加强项，需要上游 bridge
 
 - **绑定地址**：webserver 只用 `127.0.0.1`，永不绑 `0.0.0.0`。控制台无鉴权，
   绑外网等于把插件配置面暴露给局域网。
-- **stdout 纪律**：launcher、控制台 bin、用户插件一律不得写 stdout（JSON-RPC 专线）；
-  诊断走 stderr，经 Cindy 的 `redactSensitiveText` 脱敏后才进日志。
+- **stdout 纪律**：对话 launcher 与用户插件不得写 stdout（JSON-RPC 专线）；官方
+  `dsh web` 控制台的 stdout 是其 readiness/diagnostic 通道，Main 只解析严格 loopback URL。
+  stderr 经 Cindy 的 `redactSensitiveText` 脱敏后才进日志。
 - **凭证**：`DEEPSEEK_API_KEY` 只由 Cindy Main 在启动对话会话时经 env 白名单注入；
   控制台进程默认不持有。用户插件运行在对话会话进程内，**读得到该进程 env**——
   因此 patch 文件和插件目录必须视为「用户自己机器上的显式信任配置」，不做远程同步、
   不做 UI 诱导安装，文档里写清楚这一点。
-- **patch 覆盖的失控面**：patch 能按 id 覆盖 Cindy 既有条目的 config（如把 bash 超时
-  改大、打开 skills）。这是能力也是风险：M1 起在文档中明示「覆盖既有条目属于高级用法，
-  错误覆盖会导致会话 fail-loud」。
+- **patch 覆盖边界**：用户 patch 位于 official base 之后，可扩展或覆盖 DSH 自有配置；
+  Cindy 的凭证、沙箱、权限、preset root 与 bridge overlay 后置，用户 patch 不能反向覆盖
+  这些宿主安全边界。错误 patch 或插件仍按 DSH 语义 fail-loud。
 - **WebView（方案 A 时）**：`nodeIntegration: false`、`contextIsolation: true`、
   锁定导航到 `http://127.0.0.1:<port>`、禁用 `window.open` 外跳或经确认框——逐条对照
   electron 安全基线文档执行。
@@ -401,7 +410,7 @@ A 作为体验升级紧随其后；B 留作安全加强项，需要上游 bridge
 | 2 | `dsh-settings-file` / web 前端 dist 不在当前随包闭包 | M2/M3 需要加依赖、重打包 | 加进 `apps/desktop/package.json`，整组对齐 rc.7 |
 | 3 | Web 设置页只呈现「Host 已加载插件」的 namespace | 用户插件没进控制台 boot 时其配置卡不可见 | 控制台 boot 同读 `cordis.patch.yml`（§6.1 已含） |
 | 4 | 对话会话是短进程，Web 里改配置对**进行中的**回合语义取决于各插件自身 | 部分配置可能下个会话才生效 | settings-file 热发布能覆盖多数；文档如实写明 |
-| 5 | SSH 远程会话的用户插件 | patch 文件在远端 `~/.dsh`，与本地不同步 | M1 只承诺本地；远程在文档中标记未覆盖 |
+| 5 | SSH 远程会话的用户插件 | patch/settings 属于远端，不能错误读取本机模式 | transport 执行同一 launcher 并读远端 `~/.dsh`；本轮不把本机 preset 列表传给远端 |
 | 6 | 上游 rc 版本升级改 patch/boot 契约 | launcher 编译期不错、运行期挂 | launcher 只做薄封装 + 附录 A 的 PoC 收进回归脚本，升级后先跑 PoC |
 | 7 | 仓库规则张力：`composition.ts` 应收缩 | 本方案没动 composition，但新增了 Cindy 侧 launcher | 在 PR 说明中引用本文档，说明 launcher 是「搬运 DSH 自有机制」而非扩展 DSH 内部流程 |
 
@@ -428,7 +437,7 @@ A 作为体验升级紧随其后；B 留作安全加强项，需要上游 bridge
 | M2 集成 | settings.yaml 共享 | 改文件 → 会话内行为变 |
 | M3 手工 | 浏览器开控制台、改配置、查落盘 | §6.4 |
 | M4 联调 | 入口 → 控制台 → 改配置 → 对话生效 | §7.3 |
-| 正式包 smoke | 打包后全链路 | launcher/console-bin 入包、无 ASAR 解析失败 |
+| 正式包 smoke | Windows x64 Beta 打包后全链路 | 已通过：launcher/runtime 入包、全新数据库初始化、Electron 退出码 0，无 ASAR 解析失败 |
 | 提交门禁 | `pnpm test:unit:related` + desktop/maker-core typecheck + `check:i18n-glossary` | 全绿 |
 
 ## 附录 A：已验证的机制 PoC（2026-08-19）

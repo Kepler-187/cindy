@@ -34,6 +34,10 @@ const updaterIconsDir = path.join(__dirname, '..', 'cindy-updater', 'src-tauri',
 
 const masterPath = process.argv[2] ?? path.join(resourcesDir, 'icon-master-1024.png');
 const outPath = process.argv[3] ?? defaultOutPath;
+const companionPngPath = path.join(
+  path.dirname(outPath),
+  `${path.basename(outPath, path.extname(outPath))}.png`,
+);
 
 const CANVAS = 1024;
 // 保留 macOS 模板的圆角比例（185.4 / 824），但不保留 macOS 外边距。
@@ -159,6 +163,10 @@ async function main() {
 
   const sizeKb = (fs.statSync(outPath).size / 1024).toFixed(0);
   console.log(`[generate-win-ico] wrote ${outPath} (${sizeKb} KB, ${entries.length} entries)`);
+
+  const companionPng = await sharp(roundedMaster).resize(512, 512).png().toBuffer();
+  fs.writeFileSync(companionPngPath, companionPng);
+  console.log(`[generate-win-ico] wrote ${companionPngPath}`);
 
   if (path.resolve(outPath) === path.resolve(defaultOutPath)) {
     await syncDefaultCompanionIcons(roundedMaster);

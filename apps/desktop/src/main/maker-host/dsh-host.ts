@@ -1,6 +1,5 @@
 /** Desktop-only construction for the optional DeepSeek Harness adapter. */
 import fs from 'node:fs';
-import { createRequire } from 'node:module';
 import path from 'node:path';
 
 import { DshAgent, type AgentDeps, type DshVendorOptions } from '@cindy/maker-core';
@@ -22,14 +21,11 @@ import { normalizeDshProviderBaseUrl } from './dsh-provider-url.js';
 import { buildDesktopClaudeRuntimeConfig } from './runtime-configs.js';
 import { createSshDshTransport } from './dsh-remote-transport.js';
 
-const require = createRequire(import.meta.url);
-
 export interface ResolveDshLauncherOptions {
   override?: string;
   appPath?: string;
   isPackaged?: boolean;
   exists?: (candidate: string) => boolean;
-  resolveFallback?: () => string;
 }
 
 export function resolveDshLauncher(options: ResolveDshLauncherOptions = {}): string | null {
@@ -41,17 +37,7 @@ export function resolveDshLauncher(options: ResolveDshLauncherOptions = {}): str
     (options.isPackaged ?? app.isPackaged)
       ? path.join(appPath, '.vite', 'build', 'cindy-dsh-bin.mjs')
       : path.join(appPath, 'dsh', 'cindy-dsh-bin.mjs');
-  if (exists(launcher)) return launcher;
-  try {
-    // packaged-bin resolves the plugin graph from the installed DSH runtime,
-    // rather than from the per-session temporary config directory.
-    return (
-      options.resolveFallback ??
-      (() => require.resolve('@deepseek-ai/dsh-sdk-jsonrpc-demo/packaged-bin'))
-    )();
-  } catch {
-    return null;
-  }
+  return exists(launcher) ? launcher : null;
 }
 
 /**
@@ -187,11 +173,16 @@ export function createDesktopRemoteDshTransport(
   input: Parameters<NonNullable<AgentDeps['createRemoteDshTransport']>>[0],
   logger: AgentDeps['logger'],
 ) {
+  const launcherPath = resolveDshLauncher();
+  if (!launcherPath || path.basename(launcherPath) !== 'cindy-dsh-bin.mjs') {
+    throw new Error('Cindy DSH launcher is unavailable for the remote host');
+  }
   return createSshDshTransport({
     remoteHost,
     workingDir: input.workingDir,
     configYaml: input.configYaml,
     bridgeSource: input.bridgeSource,
+    launcherSource: fs.readFileSync(launcherPath, 'utf8'),
     apiKey: input.apiKey,
     sessionRoot: input.sessionRoot,
     logger,

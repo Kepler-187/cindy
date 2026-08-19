@@ -21,13 +21,21 @@ class FakeChild extends EventEmitter {
 
 function createHarness(overrides: Partial<DshConsoleProcessDeps> = {}) {
   const children: FakeChild[] = [];
-  const spawn = vi.fn((_workerPath: string, _cliPath: string, _options: Electron.ForkOptions) => {
-    const child = new FakeChild();
-    children.push(child);
-    return child as unknown as DshConsoleChild;
-  });
+  const spawn = vi.fn(
+    (
+      _workerPath: string,
+      _cliPath: string,
+      _patchPath: string,
+      _options: Electron.ForkOptions,
+    ) => {
+      const child = new FakeChild();
+      children.push(child);
+      return child as unknown as DshConsoleChild;
+    },
+  );
   const controller = new DshConsoleProcess({
     cliPath: 'C:\\dsh\\lib\\bin.js',
+    patchPath: 'C:\\app\\cindy-dsh-web.patch.yml',
     workerPath: 'C:\\app\\dshConsoleWorkerProcess.js',
     cwd: 'C:\\Users\\test',
     env: {
@@ -52,8 +60,9 @@ describe('DshConsoleProcess', () => {
     const first = controller.ensureStarted();
     const second = controller.ensureStarted();
     expect(spawn).toHaveBeenCalledTimes(1);
-    expect(spawn.mock.calls[0]?.[2].execArgv).toEqual(['--expose-internals']);
-    expect(spawn.mock.calls[0]?.[2].env).toEqual({
+    expect(spawn.mock.calls[0]?.[2]).toBe('C:\\app\\cindy-dsh-web.patch.yml');
+    expect(spawn.mock.calls[0]?.[3].execArgv).toEqual(['--expose-internals']);
+    expect(spawn.mock.calls[0]?.[3].env).toEqual({
       PATH: 'C:\\Windows',
       DSH_HOME: 'C:\\Users\\test\\.dsh',
     });

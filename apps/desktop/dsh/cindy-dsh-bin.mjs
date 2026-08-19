@@ -3,22 +3,18 @@
 /**
  * Cindy's thin local DSH launcher.
  *
- * It preserves the upstream packaged-bin stdio contract while adding two DSH-owned
- * configuration layers: the settings provider and the user's home-level patch file.
+ * It preserves the upstream packaged-bin stdio contract while composing the official
+ * DSH base, the user's home-level patch, and Cindy's narrow runtime overlay.
  * Stdout belongs exclusively to JSON-RPC; all launcher diagnostics go to stderr.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const NAME = 'cindy-dsh-agent';
-const SETTINGS_ENTRY = Object.freeze({
-  insert: [{ id: 'settings', name: '@deepseek-ai/dsh-settings-file' }],
-});
-
-export function composePatchLayers(userPatches) {
-  return [SETTINGS_ENTRY, ...(userPatches ?? [])];
+export function composePatchLayers(basePatches, userPatches, cindyPatches, derivedPatches = []) {
+  return [...basePatches, ...(userPatches ?? []), ...cindyPatches, ...derivedPatches];
 }
 
 export function resolveRequestedConfig(env = process.env, argv = process.argv) {
@@ -40,6 +36,89 @@ export function resolveBareModuleBaseUrl(runtimeRequire = createInstalledRuntime
     .href;
 }
 
+export function resolveShippedPresetRoot(runtimeRequire = createInstalledRuntimeRequire()) {
+  return path.join(
+    path.dirname(runtimeRequire.resolve('@deepseek-ai/dsh/package.json')),
+    'config',
+    'agent-presets',
+  );
+}
+
+export function resolveBundlePatchPath(packageName, runtimeRequire = createInstalledRuntimeRequire()) {
+  const manifestPath = runtimeRequire.resolve(`${packageName}/package.json`);
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const declared = manifest?.dsh?.bundle?.patch;
+  if (typeof declared !== 'string' || declared.length === 0) {
+    throw new Error(`${NAME}: ${packageName} does not declare dsh.bundle.patch`);
+  }
+  return path.resolve(path.dirname(manifestPath), declared);
+}
+
+export function presetRootPatch(entries, presetRoot) {
+  const presetEntry = entries.find((entry) => entry?.id === 'agent-presets');
+  if (!presetEntry) throw new Error(`${NAME}: Cindy overlay did not compose agent-presets`);
+  return [{
+    id: 'agent-presets',
+    config: {
+      ...(presetEntry.config ?? {}),
+      roots: [{ path: presetRoot, trust: 'system' }],
+    },
+  }];
+}
+
+export function resolveCindyBridgeEntry(patches, bridgeUrl) {
+  let matches = 0;
+  const resolved = patches.map((patch) => {
+    if (!Array.isArray(patch?.insert)) return patch;
+    return {
+      ...patch,
+      insert: patch.insert.map((entry) => {
+        if (entry?.id !== 'cindy-dsh-bridge') return entry;
+        matches += 1;
+        return { ...entry, name: bridgeUrl };
+      }),
+    };
+  });
+  if (matches !== 1) throw new Error(`${NAME}: Cindy overlay must insert exactly one bridge entry`);
+  return resolved;
+}
+
+/**
+ * Cindy does not own preset ids. Read the active DSH web bundle's declared
+ * default and apply it to Cindy's separately composed agent-preset service.
+ */
+export function resolveOfficialPresetDefault(
+  runtimeRequire,
+  loadOverlayPatches,
+  composeEntries,
+) {
+  const webPatchPath = resolveBundlePatchPath('@deepseek-ai/dsh-web-app', runtimeRequire);
+  const entries = composeEntries([loadOverlayPatches(NAME, webPatchPath)]);
+  const presetEntry = entries.find((entry) => entry?.id === 'agent-presets');
+  const defaultId = presetEntry?.config?.default;
+  if (typeof defaultId !== 'string' || defaultId.length === 0) {
+    throw new Error(`${NAME}: active DSH web bundle does not declare an agent preset default`);
+  }
+  return defaultId;
+}
+
+export function applyAgentPresetDefault(patches, defaultId) {
+  let matches = 0;
+  const resolved = patches.map((patch) => {
+    if (!Array.isArray(patch?.insert)) return patch;
+    return {
+      ...patch,
+      insert: patch.insert.map((entry) => {
+        if (entry?.id !== 'agent-presets') return entry;
+        matches += 1;
+        return { ...entry, config: { ...(entry.config ?? {}), default: defaultId } };
+      }),
+    };
+  });
+  if (matches !== 1) throw new Error(`${NAME}: Cindy overlay must insert exactly one agent-presets entry`);
+  return resolved;
+}
+
 async function loadDshRuntime(runtimeRequire) {
   const [appBoot, homePaths] = await Promise.all([
     import(pathToFileURL(runtimeRequire.resolve('@deepseek-ai/dsh-app-boot')).href),
@@ -56,10 +135,12 @@ export async function runCindyDshAgent({
 } = {}) {
   const {
     boot,
+    composeEntries,
     dshHomePath,
     installFailLoud,
     loadEnv,
     loadOptionalPatches,
+    loadOverlayPatches,
     PROFILE_PATCH_FILENAME,
     resolveConfigPath,
   } = await loadDshRuntime(runtimeRequire);
@@ -67,20 +148,41 @@ export async function runCindyDshAgent({
   installFailLoud(NAME);
   loadEnv(NAME);
   const requested = resolveRequestedConfig(env, argv);
-  const configPath = requested === undefined ? undefined : resolveConfigPath(requested, undefined);
-  if (configPath === undefined || !existsSync(configPath)) {
+  const overlayPath = requested === undefined ? undefined : resolveConfigPath(requested, undefined);
+  if (overlayPath === undefined || !existsSync(overlayPath)) {
     process.stderr.write(
       `usage: ${NAME} <path/to/cordis.yml> (or set DSH_CORDIS_CONFIG=<path>, which wins); the config is required\n`,
     );
     process.exit(1);
   }
 
+  const launcherDir = path.dirname(fileURLToPath(import.meta.url));
+  const configPath = path.join(launcherDir, 'cindy-dsh-empty.yml');
+  const basePatchPath = resolveBundlePatchPath('@deepseek-ai/dsh-base', runtimeRequire);
+  const basePatches = loadOverlayPatches(NAME, basePatchPath);
+  const officialPresetDefault = resolveOfficialPresetDefault(
+    runtimeRequire,
+    loadOverlayPatches,
+    composeEntries,
+  );
+  const cindyPatches = resolveCindyBridgeEntry(
+    applyAgentPresetDefault(loadOverlayPatches(NAME, overlayPath), officialPresetDefault),
+    pathToFileURL(path.join(path.dirname(overlayPath), 'cindy-dsh-bridge.mjs')).href,
+  );
   const userPatchPath = dshHomePath(PROFILE_PATCH_FILENAME);
   const userPatches = loadOptionalPatches(NAME, userPatchPath);
+  process.env.DSH_AGENT_MODULE_URL = pathToFileURL(
+    runtimeRequire.resolve('@deepseek-ai/dsh-agent'),
+  ).href;
+  const preliminary = composePatchLayers(basePatches, userPatches, cindyPatches);
+  const derived = presetRootPatch(
+    composeEntries([preliminary]),
+    resolveShippedPresetRoot(runtimeRequire),
+  );
   const ctx = await boot(
     NAME,
     configPath,
-    composePatchLayers(userPatches),
+    composePatchLayers(basePatches, userPatches, cindyPatches, derived),
     undefined,
     resolveBareModuleBaseUrl(runtimeRequire),
   );

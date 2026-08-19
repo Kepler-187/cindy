@@ -5697,6 +5697,13 @@
       },
       "modelListAria": "模型清單"
     },
+    "dshModeSelector": {
+      "description": "選擇 DSH 模式",
+      "triggerAria": "選擇 DSH 模式：{{label}}",
+      "listAria": "DSH 模式",
+      "retry": "載入失敗，點擊重試",
+      "empty": "DSH 未提供可用模式"
+    },
     "permissionSelector": {
       "triggerAria": "選擇權限模式：{{label}}",
       "listAria": "權限模式",
@@ -5746,6 +5753,20 @@
           "bypassPermissions": {
             "label": "完全訪問",
             "description": "所有工具無需詢問直接執行。風險最高，只適合可信任務。"
+          }
+        },
+        "dsh": {
+          "ask": {
+            "label": "唯讀",
+            "description": "只允許讀取工作區內容，不允許修改檔案或執行寫入操作。"
+          },
+          "auto": {
+            "label": "工作區寫入",
+            "description": "允許在工作區內讀寫；存取工作區外位置和高風險操作仍受限制。"
+          },
+          "bypassPermissions": {
+            "label": "完全存取",
+            "description": "允許修改任意檔案並執行命令，無需再次確認。風險最高，只適合可信任的任務。"
           }
         }
       }

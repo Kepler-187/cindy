@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildDshCordisConfig, renderDshCordisYaml } from "./composition.js";
 
 describe("DSH Cordis composition", () => {
-  it("quotes scoped package names so the generated YAML can load the DeepSeek plugin graph", () => {
+  it("overlays the official DSH base with Cindy's code runtime and dynamic preset service", () => {
     const yaml = renderDshCordisYaml(
       buildDshCordisConfig({
         provider: "deepseek-official",
@@ -15,8 +15,11 @@ describe("DSH Cordis composition", () => {
       }),
     );
 
-    expect(yaml).toContain('name: "@deepseek-ai/dsh-llm-deepseek"');
+    expect(yaml).toContain('id: "llm-deepseek"');
+    expect(yaml).toContain('name: "@deepseek-ai/dsh-code-runtime-worker-thread"');
+    expect(yaml).toContain('name: "@deepseek-ai/dsh-agent-presets"');
     expect(yaml).toContain('name: "./cindy-dsh-bridge.mjs"');
+    expect(yaml).toContain('id: "tool-bash"\n  disabled: true');
   });
 
   it("carries the configured endpoint, context window, and reasoning default into the DeepSeek adapter", () => {

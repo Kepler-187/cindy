@@ -66,6 +66,7 @@ export function parsePackageArgs(argv, defaults = {}) {
   const out = {
     platform: defaults.platform ?? process.platform,
     region: 'global',
+    desktopVariant: 'stable',
     versionSpec: null,
     skipSmoke: false,
     allowUnsigned: false,
@@ -92,6 +93,7 @@ export function parsePackageArgs(argv, defaults = {}) {
         out.region = takeValue(a, i);
         i++;
         break;
+      case '--beta': out.desktopVariant = 'beta'; break;
       case '--version': out.versionSpec = takeValue(a, i); i++; break;
       case '--skip-smoke': out.skipSmoke = true; break;
       case '--allow-unsigned': out.allowUnsigned = true; break;
@@ -100,7 +102,7 @@ export function parsePackageArgs(argv, defaults = {}) {
       // (放行"缺配置")语义互补。
       case '--no-sign': out.noSign = true; out.allowUnsigned = true; break;
       default:
-        throw new Error(`未知参数: ${a}(支持 --platform/--arch/--region/--version/--skip-smoke/--allow-unsigned/--no-sign)`);
+        throw new Error(`未知参数: ${a}(支持 --platform/--arch/--region/--beta/--version/--skip-smoke/--allow-unsigned/--no-sign)`);
     }
   }
 
@@ -139,6 +141,9 @@ export function parsePackageArgs(argv, defaults = {}) {
   }
   if (out.versionSpec !== null && !regionSpecified) {
     throw new Error('版本化打包必须显式传 --region cn、global 或 dev');
+  }
+  if (out.desktopVariant === 'beta' && out.versionSpec !== null) {
+    throw new Error('Beta 测试包必须是版本无关包；请移除 --version');
   }
   if (
     out.versionSpec !== null &&
@@ -192,9 +197,15 @@ export async function resolvePackageVersion(versionSpec, fetchBaseline) {
 }
 
 /** 产物目录(相对 apps/desktop/release/):artifacts/<region>/<version|unversioned>/<platformKey> */
-export function artifactRelDir({ region, version, versionless, platformKey }) {
+export function artifactRelDir({ region, version, versionless, platformKey, desktopVariant = 'stable' }) {
   const versionSeg = versionless ? 'unversioned' : version;
-  return ['artifacts', region, versionSeg, platformKey].join('/');
+  return [
+    'artifacts',
+    region,
+    ...(desktopVariant === 'beta' ? ['beta'] : []),
+    versionSeg,
+    platformKey,
+  ].join('/');
 }
 
 /**
@@ -203,15 +214,15 @@ export function artifactRelDir({ region, version, versionless, platformKey }) {
  * 产物已按 artifactRelDir 的 `<region>/` 目录分层,文件名不再
  * 叠区域前缀。
  */
-export function artifactBaseName({ version, versionless }) {
-  return `cindy-${versionless ? 'unversioned' : version}`;
+export function artifactBaseName({ version, versionless, desktopVariant = 'stable' }) {
+  return `cindy${desktopVariant === 'beta' ? '-beta' : ''}-${versionless ? 'unversioned' : version}`;
 }
 
 /**
  * 组装 build-info.json 内容(发布侧未来只读它决定上传什么)。
  * 所有字段由编排层收集后传入,本函数保持纯组装。
  * @param {{
- *   version: string, versionless: boolean, region: string,
+ *   version: string, versionless: boolean, region: string, desktopVariant?: string,
  *   platform: string, arch: string, commitSha: string, electronVersion: string,
  *   schemaVersionMax: number, migrationFiles: string[],
  *   files: Array<{ role: string, name: string, sha256: string, size: number }>,
@@ -227,6 +238,7 @@ export function buildBuildInfo(ctx) {
     version: ctx.versionless ? null : ctx.version,
     versionless: ctx.versionless,
     region: ctx.region,
+    desktopVariant: ctx.desktopVariant ?? 'stable',
     platform: ctx.platform,
     arch: ctx.arch,
     platformKey: `${ctx.platform}-${ctx.arch}`,

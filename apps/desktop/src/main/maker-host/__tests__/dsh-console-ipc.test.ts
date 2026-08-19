@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { DSH_CONSOLE_OPEN_CHANNEL } from '../../../shared/dshConsole.js';
+import {
+  DSH_AGENT_PRESETS_LIST_CHANNEL,
+  DSH_CONSOLE_OPEN_CHANNEL,
+} from '../../../shared/dshConsole.js';
 import {
   installDshConsoleGuestHandlers,
   isAllowedDshConsoleNavigation,
+  listDshAgentPresets,
   registerDshConsoleIpc,
 } from '../dsh-console-ipc.js';
 
@@ -34,8 +38,7 @@ describe('registerDshConsoleIpc', () => {
     registerDshConsoleIpc({
       ipcMain: {
         handle: vi.fn((channel, next) => {
-          expect(channel).toBe(DSH_CONSOLE_OPEN_CHANNEL);
-          handler = next as typeof handler;
+          if (channel === DSH_CONSOLE_OPEN_CHANNEL) handler = next as typeof handler;
         }),
       },
       process: { ensureStarted } as never,
@@ -58,8 +61,8 @@ describe('registerDshConsoleIpc', () => {
     const ensureStarted = vi.fn();
     registerDshConsoleIpc({
       ipcMain: {
-        handle: vi.fn((_channel, next) => {
-          handler = next as typeof handler;
+        handle: vi.fn((channel, next) => {
+          if (channel === DSH_CONSOLE_OPEN_CHANNEL) handler = next as typeof handler;
         }),
       },
       process: { ensureStarted } as never,
@@ -79,8 +82,8 @@ describe('registerDshConsoleIpc', () => {
     const foreignGuest = createGuest(99);
     registerDshConsoleIpc({
       ipcMain: {
-        handle: vi.fn((_channel, next) => {
-          handler = next as typeof handler;
+        handle: vi.fn((channel, next) => {
+          if (channel === DSH_CONSOLE_OPEN_CHANNEL) handler = next as typeof handler;
         }),
       },
       process: { ensureStarted } as never,
@@ -91,6 +94,76 @@ describe('registerDshConsoleIpc', () => {
     await expect(handler!({ sender: { id: 10 } }, 20)).rejects.toThrow(
       'webContentsId is not a webview hosted by the sender',
     );
+    expect(ensureStarted).not.toHaveBeenCalled();
+  });
+
+  it('lists the live DSH preset roster without hardcoding plugin-provided ids', async () => {
+    const ensureStarted = vi.fn().mockResolvedValue('http://127.0.0.1:45678/');
+    const fetchMock = vi.fn(async (_url: URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { rpcId: string };
+      return new Response(
+        JSON.stringify({
+          rpcId: request.rpcId,
+          result: {
+            ok: true,
+            value: {
+              authorable: true,
+              presets: [
+                { id: 'standard', name: 'Standard', trust: 'system', isDefault: true },
+                {
+                  id: 'plugin/architecture-review',
+                  name: 'Architecture review',
+                  description: 'Added by a DSH plugin',
+                  trust: 'user',
+                  isDefault: false,
+                },
+              ],
+            },
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await expect(listDshAgentPresets({ ensureStarted } as never)).resolves.toEqual({
+        authorable: true,
+        presets: [
+          { id: 'standard', name: 'Standard', trust: 'system', isDefault: true },
+          {
+            id: 'plugin/architecture-review',
+            name: 'Architecture review',
+            description: 'Added by a DSH plugin',
+            trust: 'user',
+            isDefault: false,
+          },
+        ],
+      });
+      expect(ensureStarted).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        new URL('http://127.0.0.1:45678/api/agentPreset.list'),
+        expect.objectContaining({ method: 'POST' }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('guards the preset roster channel before starting DSH', async () => {
+    const handlers = new Map<string, (event: unknown) => Promise<unknown>>();
+    const ensureStarted = vi.fn();
+    registerDshConsoleIpc({
+      ipcMain: {
+        handle: vi.fn((channel, next) => handlers.set(channel, next as never)),
+      },
+      process: { ensureStarted } as never,
+      assertTrustedSender: (() => {
+        throw new Error('untrusted');
+      }) as never,
+      lookupWebContents: vi.fn(),
+    });
+
+    await expect(handlers.get(DSH_AGENT_PRESETS_LIST_CHANNEL)!({})).rejects.toThrow('untrusted');
     expect(ensureStarted).not.toHaveBeenCalled();
   });
 });

@@ -5,7 +5,12 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
 import { exit, stderr } from 'node:process';
-import { CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
+import {
+  CURRENT_CINDY_REGION,
+  CURRENT_DESKTOP_VARIANT,
+  IS_BETA_BUILD,
+} from '../shared/brandRegion.js';
+import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
 import { resolveRegionUserDataDirName } from './regionUserData.js';
 import { createLogger, initLogger } from './logger.js';
 import { beginDesktopDevInstance, type DesktopDevMode } from './devStartupStatus.js';
@@ -18,12 +23,20 @@ import { ensureSystemBinPathForMachineId } from './deviceId.js';
 const regionUserDataDirName = resolveRegionUserDataDirName({
   isPackaged: app.isPackaged,
   region: CURRENT_CINDY_REGION,
+  desktopVariant: CURRENT_DESKTOP_VARIANT,
   argv: process.argv,
   envUserDataDir: process.env.XDT_USER_DATA_DIR,
 });
 if (regionUserDataDirName) {
   app.setPath('userData', path.join(app.getPath('appData'), regionUserDataDirName));
 }
+// Shared safeStorage ciphertext is keyed by app.name on macOS. Beta changes
+// its OS/package identity only; keep the stable keychain service name.
+if (IS_BETA_BUILD) app.setName(BRAND_IDENTITY.displayName);
+// Beta may read/write compatible application data, but it must never advance
+// the stable profile's migration chain. Other profile-owned migration helpers
+// already observe this flag as their passive/no-maintenance contract.
+if (IS_BETA_BUILD) process.env.XDT_PASSIVE_SHARED_USER_DATA = '1';
 
 // Node happy-eyeballs(autoSelectFamily)默认每个地址只给 250ms 完成 TCP 握手,
 // VPN/高 RTT 链路上直连海外端点(platform.claude.com 换 token、订阅模式模型流量等)
@@ -125,16 +138,19 @@ if (devFlags.schedulerPassive) {
   process.env.XDT_SCHEDULER_PASSIVE = '1';
   stderr.write('[cindy] dev scheduler passive mode (--passive)\n');
 }
-if (shouldEnforcePassiveMigrationCompatibility({
-  isPackaged: app.isPackaged,
-  schedulerPassive: devFlags.schedulerPassive,
-  profileKind: devFlags.profileKind,
-})) {
-  // 内部启动契约：共享 userData 的 passive dev 只能打开与当前 checkout migration
+if (
+  IS_BETA_BUILD ||
+  shouldEnforcePassiveMigrationCompatibility({
+    isPackaged: app.isPackaged,
+    schedulerPassive: devFlags.schedulerPassive,
+    profileKind: devFlags.profileKind,
+  })
+) {
+  // 内部启动契约：共享 userData 的 passive dev 与 Beta 只能打开 migration
   // 完全一致的数据库，且不得自行迁移。localDb 在用户数据库首次打开时消费本标记。
   process.env.XDT_PASSIVE_SHARED_USER_DATA = '1';
 } else {
-  // 防止 shell 中同名 ambient env 污染 packaged / isolated 启动语义。
+  // 防止 shell 中同名 ambient env 污染 stable packaged / isolated 启动语义。
   delete process.env.XDT_PASSIVE_SHARED_USER_DATA;
 }
 if (devFlags.endpointsCdn) {

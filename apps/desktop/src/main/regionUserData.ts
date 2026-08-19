@@ -23,6 +23,7 @@
 import {
   BRAND_IDENTITY,
   brandUserDataDirName,
+  type CindyDesktopVariant,
   type CindyRegion,
 } from '@cindy/maker-shared/brand-identity';
 
@@ -38,12 +39,28 @@ function hasExplicitUserDataDir(argv: readonly string[]): boolean {
 export function resolveRegionUserDataDirName(input: {
   isPackaged: boolean;
   region: CindyRegion;
+  desktopVariant?: CindyDesktopVariant;
   argv: readonly string[];
   envUserDataDir?: string;
 }): string | null {
   if (hasExplicitUserDataDir(input.argv)) return null;
   const dirName = brandUserDataDirName(input.region);
+  // Beta has its own OS/install identity but intentionally shares the stable
+  // region profile. Pin even CN's normally implicit `Cindy` directory.
+  if (input.desktopVariant === 'beta') return dirName;
   // 与 productName 默认派生目录同名(cn)→ 不覆写,走 Electron 原生路径。
   if (dirName === BRAND_IDENTITY.userDataDirName) return null;
   return dirName;
+}
+
+/**
+ * Beta shares the stable profile but must always be a schema reader: it checks
+ * exact migration compatibility and never creates or upgrades the shared DB.
+ */
+export function shouldUsePassiveSharedUserData(input: {
+  isPackaged: boolean;
+  isBeta: boolean;
+  envPassive?: string;
+}): boolean {
+  return input.isBeta || (!input.isPackaged && input.envPassive === '1');
 }

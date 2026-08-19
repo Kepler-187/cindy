@@ -119,4 +119,48 @@ describe('Windows icon assets', () => {
       fs.rmSync(fixtureDir, { recursive: true, force: true });
     }
   });
+
+  it('keeps a large high-contrast Beta corner badge at taskbar size', () => {
+    const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-beta-icon-'));
+    const generatedMaster = path.join(fixtureDir, 'icon-beta-master-1024.png');
+    const generatedIco = path.join(fixtureDir, 'icon-beta.ico');
+    try {
+      execFileSync(process.execPath, [
+        path.join(desktopRoot, 'scripts', 'generate-beta-icon-master.mjs'),
+        path.join(resourcesDir, 'icon-master-1024.png'),
+        generatedMaster,
+      ]);
+      execFileSync(process.execPath, [
+        path.join(desktopRoot, 'scripts', 'generate-win-ico.mjs'),
+        generatedMaster,
+        generatedIco,
+      ]);
+
+      expect(fs.readFileSync(generatedMaster)).toEqual(
+        fs.readFileSync(path.join(resourcesDir, 'icon-beta-master-1024.png')),
+      );
+      const betaIco = fs.readFileSync(path.join(resourcesDir, 'icon-beta.ico'));
+      expect(fs.readFileSync(generatedIco)).toEqual(betaIco);
+      expect(betaIco).not.toEqual(fs.readFileSync(path.join(resourcesDir, 'icon.ico')));
+
+      const taskbar = decodeIcoEntries(betaIco).find(({ size }) => size === 24)!;
+      let badgePixels = 0;
+      for (let y = 0; y < 14; y++) {
+        for (let x = 10; x < 24; x++) {
+          const offset = (y * 24 + x) * 4;
+          const r = taskbar.rgba[offset];
+          const g = taskbar.rgba[offset + 1];
+          const b = taskbar.rgba[offset + 2];
+          const isWhiteType = r > 210 && g > 210 && b > 210;
+          const isGoldEdge = r > 180 && g > 130 && b < 100;
+          if (isWhiteType || isGoldEdge) badgePixels += 1;
+        }
+      }
+      // The game-style badge remains a visible shape and wordmark at 24 px,
+      // instead of collapsing into a one-pixel corner dot.
+      expect(badgePixels).toBeGreaterThanOrEqual(12);
+    } finally {
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
 });

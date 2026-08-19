@@ -11,6 +11,8 @@ import {
   PLATFORM_ARCHS,
   VERSIONLESS_VERSION,
   debianArch,
+  artifactBaseName,
+  artifactRelDir,
   parsePackageArgs,
 } from '../../apps/desktop/scripts/ci/package-lib.mjs';
 
@@ -33,6 +35,44 @@ test('parsePackageArgs: 版本无关本地包默认 global', () => {
   const out = parsePackageArgs([], { platform: 'linux', arch: 'x64' });
   assert.equal(out.region, 'global');
   assert.equal(out.versionSpec, null);
+  assert.equal(out.desktopVariant, 'stable');
+});
+
+test('parsePackageArgs: Beta 是独立、仅版本无关的打包身份', () => {
+  const beta = parsePackageArgs(['--beta'], { platform: 'linux', arch: 'x64' });
+  assert.equal(beta.desktopVariant, 'beta');
+  assert.throws(
+    () => parsePackageArgs(['--beta', '--region', 'global', '--version', '1.2.3'], {
+      platform: 'linux',
+      arch: 'x64',
+    }),
+    /Beta 测试包必须是版本无关包/,
+  );
+  assert.equal(
+    artifactBaseName({ version: '0.0.0', versionless: true, desktopVariant: 'beta' }),
+    'cindy-beta-unversioned',
+  );
+  assert.equal(
+    artifactRelDir({
+      region: 'global',
+      version: '0.0.0',
+      versionless: true,
+      platformKey: 'win32-x64',
+      desktopVariant: 'beta',
+    }),
+    'artifacts/global/beta/unversioned/win32-x64',
+  );
+});
+
+test('CN Beta packaging command pins both the region and Beta variant', () => {
+  const rootPackageJson = JSON.parse(fs.readFileSync(
+    new URL('../../package.json', import.meta.url),
+    'utf8',
+  ));
+  assert.equal(
+    rootPackageJson.scripts['release:package:beta:cn'],
+    'pnpm release:package -- --region cn --beta',
+  );
 });
 
 test('parsePackageArgs: 版本化打包必须显式指定 region', () => {

@@ -5699,6 +5699,13 @@
         "hint": "Pick the model to use after switching to {{agent}}"
       }
     },
+    "dshModeSelector": {
+      "description": "Choose a DSH mode",
+      "triggerAria": "Choose DSH mode: {{label}}",
+      "listAria": "DSH modes",
+      "retry": "Couldn't load modes. Click to retry",
+      "empty": "DSH did not provide any available modes"
+    },
     "permissionSelector": {
       "triggerAria": "Select permission mode: {{label}}",
       "listAria": "Permission modes",
@@ -5748,6 +5755,20 @@
           "bypassPermissions": {
             "label": "Full access",
             "description": "Every tool runs without asking. Highest risk; use only for trusted tasks."
+          }
+        },
+        "dsh": {
+          "ask": {
+            "label": "Read Only",
+            "description": "Can read the workspace, but cannot change files or perform write operations."
+          },
+          "auto": {
+            "label": "Workspace Write",
+            "description": "Can read and write inside the workspace; outside access and high-risk actions remain restricted."
+          },
+          "bypassPermissions": {
+            "label": "Full Access",
+            "description": "Can modify any file and run commands without asking again. Highest risk; use only for trusted tasks."
           }
         }
       }

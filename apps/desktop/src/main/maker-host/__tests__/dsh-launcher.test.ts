@@ -2,12 +2,17 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
 interface LauncherModule {
-  composePatchLayers(userPatches: unknown[] | undefined): unknown[];
+  composePatchLayers(
+    basePatches: unknown[],
+    userPatches: unknown[] | undefined,
+    cindyPatches: unknown[],
+    derivedPatches?: unknown[],
+  ): unknown[];
   createInstalledRuntimeRequire(metaUrl?: string): NodeRequire;
   resolveBareModuleBaseUrl(runtimeRequire?: NodeRequire): string;
   resolveRequestedConfig(env?: NodeJS.ProcessEnv, argv?: string[]): string | undefined;
@@ -17,7 +22,7 @@ interface ForgeDshRuntimeModule {
   stageDshRuntime(buildPath: string): void;
 }
 
-const desktopRoot = path.resolve(process.cwd());
+const desktopRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 const launcherPath = path.join(desktopRoot, 'dsh', 'cindy-dsh-bin.mjs');
 const tempRoots: string[] = [];
 
@@ -35,7 +40,16 @@ async function createLauncherFixture(): Promise<{
   const home = path.join(root, 'dsh-home');
   await mkdir(home, { recursive: true });
   const configPath = path.join(root, 'cordis.yml');
-  await writeFile(configPath, '[]\n', 'utf8');
+  await writeFile(
+    configPath,
+    '- id: hmr\n  disabled: true\n- insert:\n  - id: agent-presets\n    name: "@deepseek-ai/dsh-agent-presets"\n  - id: cindy-dsh-bridge\n    name: ./cindy-dsh-bridge.mjs\n',
+    'utf8',
+  );
+  await writeFile(
+    path.join(root, 'cindy-dsh-bridge.mjs'),
+    'export default function apply() {}\n',
+    'utf8',
+  );
   return { root, home, configPath };
 }
 
@@ -92,13 +106,20 @@ afterEach(async () => {
 });
 
 describe('Cindy DSH launcher', () => {
-  it('puts the built-in settings provider before user patch layers', async () => {
+  it('composes the official base, user patch, Cindy overlay, and derived preset roots in order', async () => {
     const launcher = await launcherModule();
+    const basePatch = { id: 'base' };
     const userPatch = { id: 'settings', config: { watch: false } };
+    const cindyPatch = { id: 'cindy' };
+    const derivedPatch = { id: 'agent-presets', config: { roots: [] } };
 
-    expect(launcher.composePatchLayers([userPatch])).toEqual([
-      { insert: [{ id: 'settings', name: '@deepseek-ai/dsh-settings-file' }] },
+    expect(
+      launcher.composePatchLayers([basePatch], [userPatch], [cindyPatch], [derivedPatch]),
+    ).toEqual([
+      basePatch,
       userPatch,
+      cindyPatch,
+      derivedPatch,
     ]);
   });
 
@@ -169,7 +190,9 @@ describe('DSH launcher packaging contract', () => {
   it('stages a runnable dependency closure without recursing through package cycles', async () => {
     const buildPath = await mkdtemp(path.join(os.tmpdir(), 'cindy-dsh-stage-'));
     tempRoots.push(buildPath);
-    const forge = (await import('../../../../forge.config')) as ForgeDshRuntimeModule;
+    const forge = (await import(
+      /* @vite-ignore */ pathToFileURL(path.join(desktopRoot, 'forge.config.ts')).href
+    )) as ForgeDshRuntimeModule;
 
     forge.stageDshRuntime(buildPath);
 
@@ -177,7 +200,16 @@ describe('DSH launcher packaging contract', () => {
     const home = path.join(buildPath, 'dsh-home');
     const configPath = path.join(buildPath, 'cordis.yml');
     await mkdir(home, { recursive: true });
-    await writeFile(configPath, '[]\n', 'utf8');
+    await writeFile(
+      configPath,
+      '- id: hmr\n  disabled: true\n- insert:\n  - id: agent-presets\n    name: "@deepseek-ai/dsh-agent-presets"\n  - id: cindy-dsh-bridge\n    name: ./cindy-dsh-bridge.mjs\n',
+      'utf8',
+    );
+    await writeFile(
+      path.join(buildPath, 'cindy-dsh-bridge.mjs'),
+      'export default function apply() {}\n',
+      'utf8',
+    );
     const result = spawnSync(process.execPath, [stagedLauncher, configPath], {
       cwd: buildPath,
       env: { ...process.env, DSH_HOME: home },
@@ -199,6 +231,8 @@ describe('DSH launcher packaging contract', () => {
 
     expect(forge).toContain('stageDshRuntime(buildPath)');
     expect(forge).toContain("'.vite', 'build', 'cindy-dsh-bin.mjs'");
+    expect(forge).toContain("'.vite', 'build', 'cindy-dsh-empty.yml'");
+    expect(forge).toContain("'.vite', 'build', 'cindy-dsh-web.patch.yml'");
     expect(forge).toContain('peerDependenciesMeta');
     expect(worker).toContain("['.js', '.mjs'].includes(path.extname(entryPath))");
     expect(worker).not.toContain('ELECTRON_RUN_AS_NODE');

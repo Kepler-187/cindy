@@ -14,9 +14,10 @@ import type { ForgeArch, ForgeConfig, ForgePlatform } from '@electron-forge/shar
 import {
   BRAND_IDENTITY,
   allDeepLinkSchemes,
-  brandAppId,
+  brandAppIdForDesktopVariant,
   brandBundleIdPrefix,
-  brandExecutableName,
+  brandExecutableNameForDesktopVariant,
+  resolveCindyDesktopVariant,
   resolveCindyRegion,
 } from '@cindy/maker-shared/brand-identity';
 import { stageMacIOSSimulatorHelper } from './forge-ios-simulator-helper';
@@ -37,7 +38,12 @@ const CINDY_REGION = resolveCindyRegion(
 // process.env):防止「只设 CINDY_AUTH_REGION 直跑 forge」时 NSIS appId 用
 // global 而 main 烘焙的 CURRENT_APP_ID 落回 cn——AUMID 漂移 = toast 静默丢失。
 process.env.VITE_CINDY_AUTH_REGION = CINDY_REGION;
-const CINDY_APP_ID = brandAppId(CINDY_REGION);
+const CINDY_DESKTOP_VARIANT = resolveCindyDesktopVariant(
+  process.env.CINDY_DESKTOP_VARIANT?.trim() || process.env.VITE_CINDY_DESKTOP_VARIANT,
+);
+process.env.VITE_CINDY_DESKTOP_VARIANT = CINDY_DESKTOP_VARIANT;
+const IS_BETA_BUILD = CINDY_DESKTOP_VARIANT === 'beta';
+const CINDY_APP_ID = brandAppIdForDesktopVariant(CINDY_REGION, CINDY_DESKTOP_VARIANT);
 const CINDY_UTI_PREFIX = brandBundleIdPrefix(CINDY_REGION);
 /**
  * 可执行文件基名,按区域派生(cn/global 同值 'Cindy',dev 'CindyDev';
@@ -46,7 +52,12 @@ const CINDY_UTI_PREFIX = brandBundleIdPrefix(CINDY_REGION);
  * 入口按同一区域切换(src/main/regionUserData.ts),两端从 brand-identity
  * 同源派生,cn/global 数据仍分库。
  */
-const CINDY_EXE = brandExecutableName(CINDY_REGION);
+const CINDY_EXE = brandExecutableNameForDesktopVariant(
+  CINDY_REGION,
+  CINDY_DESKTOP_VARIANT,
+);
+const CINDY_DISPLAY_NAME = IS_BETA_BUILD ? 'Cindy Beta' : BRAND_IDENTITY.displayName;
+const CINDY_ICON_BASENAME = IS_BETA_BUILD ? 'icon-beta' : 'icon';
 /** 更新器二进制文件名(cindy-updater.exe)。 */
 const UPDATER_EXE = `${BRAND_IDENTITY.updaterName}.exe`;
 
@@ -190,6 +201,11 @@ function sharpPlatformPkgs(platform: string, arch: string): string[] {
     pkgs.push(`@img/sharp-libvips-${platform}-${arch}`);
   }
   return pkgs;
+}
+
+function koffiPlatformPkg(platform: string, arch: string): string {
+  const koffiPlatform = platform === 'win32' ? 'win32' : platform;
+  return `@koromix/koffi-${koffiPlatform}-${arch}`;
 }
 
 // Locate a package's directory on disk. Some packages ship a strict `exports`
@@ -349,8 +365,14 @@ function copyDshDependencyTree(
 function stageDshRuntime(buildPath: string): void {
   const launcherSource = path.join(__dirname, 'dsh', 'cindy-dsh-bin.mjs');
   const launcherTarget = path.join(buildPath, '.vite', 'build', 'cindy-dsh-bin.mjs');
+  const emptyConfigSource = path.join(__dirname, 'dsh', 'cindy-dsh-empty.yml');
+  const emptyConfigTarget = path.join(buildPath, '.vite', 'build', 'cindy-dsh-empty.yml');
+  const webPatchSource = path.join(__dirname, 'dsh', 'cindy-dsh-web.patch.yml');
+  const webPatchTarget = path.join(buildPath, '.vite', 'build', 'cindy-dsh-web.patch.yml');
   fs.mkdirSync(path.dirname(launcherTarget), { recursive: true });
   fs.copyFileSync(launcherSource, launcherTarget);
+  fs.copyFileSync(emptyConfigSource, emptyConfigTarget);
+  fs.copyFileSync(webPatchSource, webPatchTarget);
 
   const desktopPackage = JSON.parse(
     fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'),
@@ -363,8 +385,17 @@ function stageDshRuntime(buildPath: string): void {
   const destModules = path.join(buildPath, 'node_modules');
   const seen = new Set<string>();
   for (const dep of dshPackages) copyDshDependencyTree(dep, destModules, undefined, seen);
+  const targetPlatform = requestedTargetPlatform();
+  const targetArch = requestedTargetArch();
+  const dshNativeOptionals = [
+    ...sharpPlatformPkgs(targetPlatform, targetArch),
+    koffiPlatformPkg(targetPlatform, targetArch),
+  ];
+  for (const dep of dshNativeOptionals) {
+    copyDshDependencyTree(dep, destModules, undefined, seen);
+  }
   console.log(
-    `[forge:afterCopy] staged Cindy DSH launcher and ${dshPackages.length} runtime roots`,
+    `[forge:afterCopy] staged Cindy DSH launcher, ${dshPackages.length} runtime roots, and ${dshNativeOptionals.length} native optionals`,
   );
 }
 
@@ -776,18 +807,24 @@ function applyMacPackagedDisplayName(buildPath: string, platform: string): void 
     // 否则 Electron 找不到 Helper app(见函数头 ⚠️)。
     const key = 'CFBundleDisplayName';
     // packager 必写该键,Set 即可;Add 兜底防未来 packager 行为变化。
-    const set = spawnSync('/usr/libexec/PlistBuddy', ['-c', `Set :${key} Cindy`, plistPath]);
+    const set = spawnSync('/usr/libexec/PlistBuddy', [
+      '-c',
+      `Set :${key} ${CINDY_DISPLAY_NAME}`,
+      plistPath,
+    ]);
     if (set.status !== 0) {
       const add = spawnSync('/usr/libexec/PlistBuddy', [
         '-c',
-        `Add :${key} string Cindy`,
+        `Add :${key} string ${CINDY_DISPLAY_NAME}`,
         plistPath,
       ]);
       if (add.status !== 0) {
         throw new Error(`[forge:postPackage] PlistBuddy failed to set ${key} in ${plistPath}`);
       }
     }
-    console.log(`[forge:postPackage] mac display name → Cindy (${appDir}/Contents/Info.plist)`);
+    console.log(
+      `[forge:postPackage] mac display name → ${CINDY_DISPLAY_NAME} (${appDir}/Contents/Info.plist)`,
+    );
   }
 }
 
@@ -854,7 +891,7 @@ function stageRipgrep(targetPlatform: string, targetArch: string): void {
 
 function extraResourcesForTarget(targetPlatform: string): string[] {
   const base = [
-    'resources/icon.png',
+    `resources/${CINDY_ICON_BASENAME}.png`,
     'resources/tools',
     'drizzle',
     'resources/cc-manager',
@@ -1342,9 +1379,13 @@ const makers: ForgeConfig['makers'] = [
     {
       options: {
         categories: ['Development'],
-        icon: path.join(__dirname, 'resources', 'icon.png'),
+        icon: path.join(__dirname, 'resources', `${CINDY_ICON_BASENAME}.png`),
         // 双 scheme:cindy 主 + xdt-maker 兼容(老分享链接不死)。
-        mimeType: allDeepLinkSchemes().map((s) => `x-scheme-handler/${s}`),
+        // Beta is a side-by-side validation entry. It must never become the
+        // operating system owner of stable Cindy links.
+        mimeType: IS_BETA_BUILD
+          ? []
+          : allDeepLinkSchemes().map((s) => `x-scheme-handler/${s}`),
         maintainer: 'Lizi <feedback@cindy.app>',
         // deb 包名规范要求小写;跟随区域 exe 名(cn/global cindy / dev cindydev)。
         name: CINDY_EXE.toLowerCase(),
@@ -1414,8 +1455,8 @@ if (isWin) {
         nsis: {
           oneClick: false,
           allowToChangeInstallationDirectory: true,
-          installerIcon: 'resources/icon.ico',
-          uninstallerIcon: 'resources/icon.ico',
+          installerIcon: `resources/${CINDY_ICON_BASENAME}.ico`,
+          uninstallerIcon: `resources/${CINDY_ICON_BASENAME}.ico`,
           createDesktopShortcut: 'always',
           createStartMenuShortcut: true,
           // 快捷方式显示名,跟随区域 exe 名(cn/global 'Cindy'——同名 .lnk
@@ -1425,7 +1466,9 @@ if (isWin) {
           // customInit 注释)。
           shortcutName: CINDY_EXE,
           runAfterFinish: true,
-          include: 'resources/installer.nsh',
+          // The shared include installs shell/file associations. Beta keeps a
+          // separate shortcut/uninstaller but deliberately claims no OS entry.
+          ...(IS_BETA_BUILD ? {} : { include: 'resources/installer.nsh' }),
         },
       }),
     }),
@@ -1473,16 +1516,16 @@ const config: ForgeConfig = {
     // 与主 exe 的「说明」字段必须同值,否则 dev 包会安装前后显示两个名字。
     win32metadata: {
       CompanyName: 'XD',
-      ProductName: 'Cindy',
-      FileDescription: BRAND_IDENTITY.displayName,
+      ProductName: CINDY_DISPLAY_NAME,
+      FileDescription: CINDY_DISPLAY_NAME,
     },
-    icon: 'resources/icon',
+    icon: `resources/${CINDY_ICON_BASENAME}`,
     // 自定义 URL scheme: xdt-maker://session/<id> | xdt-maker://project/<encoded-workingDir>
     // macOS: electron-packager 把这里的项写进 Info.plist 的 CFBundleURLTypes,
     //        系统 LaunchServices 据此把 xdt-maker:// 链接路由到本 app。
     // Windows: 不读这个字段(走 app.setAsDefaultProtocolClient 写注册表), 见
     //          main/deepLink.ts registerDeepLinkProtocol()。
-    protocols: [
+    protocols: IS_BETA_BUILD ? [] : [
       // 双 scheme 注册:cindy:// 主 + xdt-maker:// 永久兼容(存量分享链接不死)。
       { name: 'Cindy Deep Link', schemes: [...allDeepLinkSchemes()] },
     ],
@@ -1513,7 +1556,7 @@ const config: ForgeConfig = {
         'Cindy accesses Contacts only when you import them or explicitly export additions or updates.',
       NSLocalNetworkUsageDescription:
         'Cindy uses your local network to sync end-to-end encrypted Smart Contacts directly between your online desktop devices.',
-      CFBundleDocumentTypes: [
+      ...(IS_BETA_BUILD ? {} : { CFBundleDocumentTypes: [
         {
           CFBundleTypeName: 'Folder',
           CFBundleTypeRole: 'Editor',
@@ -1558,7 +1601,7 @@ const config: ForgeConfig = {
             'public.mime-type': ['application/x-xd-cshare'],
           },
         },
-      ],
+      ] }),
     },
     // Electron captures microphone input from renderer/helper processes, so the
     // helper bundles also need the usage description for macOS TCC to register

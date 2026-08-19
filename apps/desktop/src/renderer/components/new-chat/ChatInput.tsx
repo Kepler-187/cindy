@@ -140,6 +140,7 @@ import {
 } from './sourceSwitch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { PermissionSelector } from './PermissionSelector';
+import { DshModeSelector } from './DshModeSelector';
 import { ExtraDirsButton, type CollaborationMenuConfig } from './ExtraDirsButton';
 import { expandHostCapabilityInvocation } from '../../cindy-brain/hostCapabilityInvocation';
 import { focusComposerEndNextFrame, hostCapabilityForGhost, placeGhostAtComposerStart, placeHostCapabilityAtComposerStart } from './ghostComposerPlacement';
@@ -614,6 +615,9 @@ interface ChatInputProps {
    * belonging to this vendor ('cc' for Claude, 'codex' for OpenAI Codex).
    */
   vendorKey?: 'cc' | 'codex' | 'pi' | 'dsh';
+  /** DSH-owned Agent preset. The selector is rendered only while vendorKey is dsh. */
+  dshAgentPreset?: string;
+  onDshAgentPresetChange?: (presetId: string) => void;
   /**
    * Optional override for the composerDraftStore key used to persist editor
    * content (and via attachmentState, attachments) across mount/unmount.
@@ -999,6 +1003,8 @@ export function ChatInput({
   externalDragOver = false,
   onComposerDropHandled,
   vendorKey,
+  dshAgentPreset,
+  onDshAgentPresetChange,
   draftKey,
   disableAutofocus = false,
   focusOnStorageKeyChange = false,
@@ -7359,6 +7365,15 @@ export function ChatInput({
                   iconOnly={useUltraCompactToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                 />
+                {vendorKey === 'dsh' && !remoteHostId && !deviceLinkDeviceId && onDshAgentPresetChange && (
+                  <DshModeSelector
+                    value={dshAgentPreset}
+                    onChange={onDshAgentPresetChange}
+                    disabled={composerEditorLocked || settingsLocked}
+                    dense={effectiveDenseToolbar}
+                    visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
+                  />
+                )}
                 {useNarrowToolbar && !useCompactMiddleToolbar && <>{middleToolbarSlot}</>}
               </div>
               <div

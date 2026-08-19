@@ -8,12 +8,31 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const cliPath = process.argv[2];
+const patchPath = process.argv[3];
 
 if (typeof cliPath !== 'string' || !path.isAbsolute(cliPath) || path.extname(cliPath) !== '.js') {
   throw new Error('DSH console CLI path is invalid');
 }
 
-process.argv = [process.argv[0], cliPath, 'web', '--host', '127.0.0.1', '--port', '0'];
+if (
+  typeof patchPath !== 'string' ||
+  !path.isAbsolute(patchPath) ||
+  !['.yml', '.yaml'].includes(path.extname(patchPath))
+) {
+  throw new Error('DSH console patch path is invalid');
+}
+
+process.argv = [
+  process.argv[0],
+  cliPath,
+  'web',
+  '--patch',
+  patchPath,
+  '--host',
+  '127.0.0.1',
+  '--port',
+  '0',
+];
 
 void import(/* @vite-ignore */ pathToFileURL(cliPath).href).catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);

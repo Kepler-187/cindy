@@ -50,6 +50,8 @@ export interface VendorPrefs {
    * 发送建会话时透传给 createSession,使草稿选定的来源在新会话里生效(与会话内切来源一致)。
    */
   providerId?: string | null;
+  /** DSH-owned Agent preset id. Arbitrary strings are preserved for user/plugin presets. */
+  dshAgentPreset?: string;
 }
 
 /**
@@ -350,6 +352,11 @@ function sanitize(raw: unknown): NewMakerDraft {
       // providerId: 接受非空 string 或 null;脏数据 / 缺字段一律落 null(跟随默认路由)。
       providerId:
         typeof p.providerId === 'string' && p.providerId.length > 0 ? p.providerId : null,
+      ...(v === 'dsh'
+        ? typeof p.dshAgentPreset === 'string' && p.dshAgentPreset.length > 0
+          ? { dshAgentPreset: p.dshAgentPreset }
+          : {}
+        : {}),
     };
   };
   // modelChosenByVendor: 老版本 localStorage 没有这个字段 → 空对象兜底

@@ -6,12 +6,15 @@ import {
   allDeepLinkSchemes,
   allUserDataDirNames,
   brandAppId,
+  brandAppIdForDesktopVariant,
   brandBundleIdPrefix,
   brandExecutableName,
+  brandExecutableNameForDesktopVariant,
   brandUserDataDirName,
   legacyBrandUserDataDirNames,
   legacyDialogueUserDataDirNames,
   resolveCindyRegion,
+  resolveCindyDesktopVariant,
 } from '../brandIdentity.js';
 
 /**
@@ -150,6 +153,16 @@ describe('区域解析与派生', () => {
     expect(brandUserDataDirName()).toBe('CindyGlobal');
     expect(brandUserDataDirName('global')).toBe('CindyGlobal');
     expect(brandUserDataDirName('cn')).toBe('Cindy');
+  });
+
+  it('Beta 只分离系统/安装身份，不改变区域数据身份', () => {
+    expect(resolveCindyDesktopVariant(undefined)).toBe('stable');
+    expect(resolveCindyDesktopVariant('BETA')).toBe('beta');
+    expect(() => resolveCindyDesktopVariant('nightly')).toThrow(/Invalid Cindy desktop variant/);
+    expect(brandAppIdForDesktopVariant('global', 'beta')).toBe('com.xd.cindy.beta');
+    expect(brandAppIdForDesktopVariant('cn', 'beta')).toBe('com.xd.cindycn.beta');
+    expect(brandExecutableNameForDesktopVariant('global', 'beta')).toBe('CindyBeta');
+    expect(brandUserDataDirName('global')).toBe('CindyGlobal');
   });
 });
 

@@ -5697,6 +5697,13 @@
         "hint": "{{agent}} に切り替えた後に使用するモデルを選択してください"
       }
     },
+    "dshModeSelector": {
+      "description": "DSH モードを選択",
+      "triggerAria": "DSH モードを選択：{{label}}",
+      "listAria": "DSH モード",
+      "retry": "読み込みに失敗しました。クリックして再試行",
+      "empty": "DSH から利用可能なモードが提供されていません"
+    },
     "permissionSelector": {
       "triggerAria": "権限モードを選択：{{label}}",
       "listAria": "権限モード",
@@ -5746,6 +5753,20 @@
           "bypassPermissions": {
             "label": "フルアクセス",
             "description": "すべてのツールを確認なしで実行します。最もリスクが高いため、信頼できるタスクでのみ使用してください。"
+          }
+        },
+        "dsh": {
+          "ask": {
+            "label": "読み取り専用",
+            "description": "ワークスペースを読み取れますが、ファイルの変更や書き込み操作はできません。"
+          },
+          "auto": {
+            "label": "ワークスペース書き込み",
+            "description": "ワークスペース内で読み書きできます。外部へのアクセスと高リスク操作は引き続き制限されます。"
+          },
+          "bypassPermissions": {
+            "label": "フルアクセス",
+            "description": "再確認なしで任意のファイルを変更し、コマンドを実行できます。信頼できるタスクにのみ使用してください。"
           }
         }
       }

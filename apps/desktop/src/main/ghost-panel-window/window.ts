@@ -15,6 +15,7 @@
 import { BrowserWindow, app, nativeTheme } from 'electron';
 import path from 'node:path';
 import windowStateKeeper from 'electron-window-state';
+import { CURRENT_DESKTOP_ICON_FILENAME } from '../../shared/brandRegion.js';
 
 import { createLogger } from '../logger.js';
 import { markAppContentWindow } from '../windowFocusClassifier.js';
@@ -51,8 +52,8 @@ export function createGhostPanelWindow(ghostId: string, title: string): BrowserW
     minHeight: 400,
     title,
     icon: app.isPackaged
-      ? path.join(process.resourcesPath, 'icon.png')
-      : path.join(__dirname, '../../resources/icon.png'),
+      ? path.join(process.resourcesPath, CURRENT_DESKTOP_ICON_FILENAME)
+      : path.join(__dirname, '../../resources', CURRENT_DESKTOP_ICON_FILENAME),
     autoHideMenuBar: true,
     show: false,
     backgroundColor: bgColor,
