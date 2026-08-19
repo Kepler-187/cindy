@@ -9,7 +9,7 @@
 模型侧插件发现要同时满足两个硬目标：
 
 - **召回**：用户没有点名插件时，模型能按使用场景想起合适的插件。召回线索必须与
-  Agent Skill 的 description 同级别稳定常驻，且 Claude Code、Codex、Pi 三个
+  Agent Skill 的 description 同级别稳定常驻，且 Claude Code、Codex、Pi、DSH 四个
   harness 行为一致。
 - **零污染**：插件的业务规则、工具明细、参数 schema 只在真正需要时进入会话；
   常驻内容只有最小召回线索。
@@ -79,13 +79,19 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 ### 3.2 注入位置（vendor-neutral，一份 formatter 两处消费）
 
 - **system 段（主通道）**：仿 Smart Contacts（`getContactsPromptState`）的接线
-  模式——`AgentDeps` 新增回调按 `{workingDir}` 取花名册文本，三 harness 各自在
+  模式——`AgentDeps` 新增回调按 `{workingDir}` 取花名册文本，四 harness 各自在
   会话装配点追加：
   - Claude Code：`buildQuery` → `systemPrompt.append`；
   - Codex：`startSession` → `developerInstructions`（HTTP proxy / OAuth WS /
     远程 SSH 三形态同一拼装函数；远端 SSH 下花名册按 §3.4 为空）；
   - Pi：`PiAgent.startSession` 把花名册段追加进 `--append-system-prompt`
-    （Desktop 侧 `composePiSystemPrompt` 预构建的产品段保持不变）。
+    （Desktop 侧 `composePiSystemPrompt` 预构建的产品段保持不变）；
+  - DSH：`DshAgent.startSession` 求值一次（`remoteHostId` → 空），经
+    `buildDshBridgeSource(roster)` 以 JSON 字面量整体插值进
+    `cindy-dsh-bridge.mjs`，bridge 在 `composePreset` 的 `setup(agentCtx)` 里
+    `agentCtx.systemPrompt.section({ name: 'cindy:roster', order: 60, text: ROSTER })`
+    注册（与 dsh-agent 的 `installModelSelection` 同机制）；插件工具面走
+    dsh-mcp-client 的 loopback 通道（`docs/dsh-cindy-plugin-channel.md`）。
 - **`ghost_list` 工具描述（副通道）**：同一 formatter 输出，与 system 段字节
   一致。副通道保证只看工具面的路径（以及历史行为）不回退。
 - 纯格式化函数下沉在 `packages/cindy-tools`，主进程与 MCP server 共用，避免两处
@@ -199,10 +205,13 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 - 作者契约（FORGE_GUIDE）：`apps/desktop/src/main/cindy-brain/forge.ts`
 - 摘要与 manual 契约：本仓 `packages/plugin-protocol/src/manifest.ts`，desktop
   在 `apps/desktop/src/shared/ghost.ts` 维护完整镜像
-- 三 harness 注入落点：`packages/maker-core/src/agents/claude-code/index.ts`
+- 四 harness 注入落点：`packages/maker-core/src/agents/claude-code/index.ts`
   （buildQuery）、`packages/maker-core/src/agents/codex/index.ts`
   （startSession → developerInstructions）、
   `packages/maker-core/src/agents/pi/index.ts`（startSession →
   `--append-system-prompt`）；Pi 的 host 侧装配在
   `apps/desktop/src/main/maker-host/pi-host.ts`（buildPiAgent /
-  composePiSystemPrompt）
+  composePiSystemPrompt）；DSH 在 `packages/maker-core/src/agents/dsh/index.ts`
+  （startSession → `buildDshBridgeSource`）与
+  `packages/maker-core/src/agents/dsh/bridge-source.ts`
+  （`agentCtx.systemPrompt.section` 注册段）

@@ -20,6 +20,7 @@ import { readDshProviderApiKey } from './dsh-provider-key.js';
 import { normalizeDshProviderBaseUrl } from './dsh-provider-url.js';
 import { buildDesktopClaudeRuntimeConfig } from './runtime-configs.js';
 import { createSshDshTransport } from './dsh-remote-transport.js';
+import { getGhostRosterPrompt } from '../mcp-integrations/ghost.js';
 
 export interface ResolveDshLauncherOptions {
   override?: string;
@@ -59,6 +60,9 @@ export function buildDshAgent(
     createLocalDshTransport: (input) => createDesktopLocalDshTransport({ ...input, logger }),
     createRemoteDshTransport,
     capabilityAdditions,
+    // 花名册与 Claude/Codex/Pi 同源;getGhostRosterPrompt 无 workingDir 时
+    // 返回 ''(宁缺勿全),远端会话由 DshAgent 侧 remoteHostId gate 兜底。
+    getGhostRosterPrompt,
   });
 }
 
@@ -157,6 +161,12 @@ export function prepareDshVendorOptions(input: {
   providerId?: string | null;
   modelId: string;
   remoteHostId?: string;
+  /**
+   * 本地会话的 Cindy 插件通道注册结果(dshCindyMcpHost.registerSession);
+   * 远端会话不传(fail-closed)。url/token 只透传给 DshAgent,token 不进
+   * 任何持久化路径。
+   */
+  dshCindyMcp?: { url: string; token: string };
 }): DshVendorOptions {
   const resolved = resolveDshVendorOptions(input);
   return {
@@ -165,6 +175,12 @@ export function prepareDshVendorOptions(input: {
     dshSessionRoot: input.remoteHostId
       ? '$HOME/.xdt-server/v1/dsh-sessions'
       : path.join(app.getPath('userData'), 'dsh-sessions'),
+    ...(input.dshCindyMcp
+      ? {
+          dshCindyMcpUrl: input.dshCindyMcp.url,
+          dshCindyMcpToken: input.dshCindyMcp.token,
+        }
+      : {}),
   };
 }
 

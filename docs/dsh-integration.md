@@ -19,9 +19,9 @@ DSH 是 Cindy 的 DeepSeek Harness agent。它沿用现有的 DeepSeek 供应商
 | 层 | 负责 | 不负责 |
 | --- | --- | --- |
 | Renderer | 配置、来源/模型选择、状态呈现、输入限制 | 凭证裁决、启动进程、DSH 内部执行流程 |
-| Desktop Main | 按所选来源解析路由与密钥，持有本地/远程 transport 和进程生命周期 | 按模型猜来源、改写 DSH 插件或内部工作流 |
+| Desktop Main | 按所选来源解析路由与密钥，持有本地/远程 transport 和进程生命周期；**DSH 会话的 Cindy 插件通道**（ghost MCP loopback 端点、per-session token、会话注册/注销） | 按模型猜来源、改写 DSH 插件或内部工作流 |
 | maker-core adapter | 生成最小启动交接、JSONL/RPC 翻译、关闭与失败清理 | Electron 打包进程选择、用户凭证持久化 |
-| DSH runtime | 实际执行流程及其插件、技能、工具与子 Agent 编排 | Cindy 的设置 UI、供应商持久化与安全存储 |
+| DSH runtime | 实际执行流程及其插件、技能、工具与子 Agent 编排（含 `dsh-mcp-client` 经 `mcp-cindy` 行连接 Cindy 插件通道、经 bridge 注册花名册 system 段） | Cindy 的设置 UI、供应商持久化与安全存储 |
 
 Cindy 的长期职责是 DSH 的呈现与双向传输入口，DSH 自己拥有内部执行流程和插件配置。当前
 `packages/maker-core/src/agents/dsh/composition.ts` 仍由 Cindy 生成一部分 Cordis boot graph，这是已知的
@@ -270,6 +270,31 @@ Desktop 本地会话默认经 `apps/desktop/dsh/cindy-dsh-bin.mjs` 启动。这�
 `settings.yaml` 无效时同样应修复或删除该文件；删除后各 namespace 回到插件组装的默认值。当前这两份本地配置
 只作用于本机 DSH；SSH 会话使用远端主机自己的 DSH home，不与本机同步。
 
+## DSH 会话的 Cindy 插件通道
+
+本地 DSH 会话现在获得与 Claude Code / Codex / Pi 一致的 Cindy 插件工具面与召回线索（2026-08-20，
+方案与门禁见 `docs/dsh-cindy-plugin-channel.md`）：
+
+- **工具面**：`cindy` MCP server（`ghost_list` / `ghost_info` / `ghost_manual` / `ghost_call` /
+  `ghost_forge_guide` / `ghost_forge_scaffold` / `ghost_forge_pack`）以 `mcp__cindy__*` 命名进入 DSH
+  工具面。实现：Main 起 loopback streamable-http 端点（`mcp-integrations/dshCindyMcpHost.ts`，
+  127.0.0.1 随机端口 + per-session 随机 bearer token），`buildDshCordisConfig` 在本地会话的 overlay
+  insert 段生成 `mcp-cindy` 行激活 `@deepseek-ai/dsh-mcp-client`；token 经 `CINDY_DSH_MCP_TOKEN`
+  env 注入 DSH 进程，YAML 里只有 `!!js` env 引用，token 明文不落盘。
+- **花名册 system 段**：`getGhostRosterPrompt` 在会话装配时求值一次、会话内恒定（prompt 前缀缓存
+  安全），经 `buildDshBridgeSource` 以 JSON 字面量插值进 `cindy-dsh-bridge.mjs`，由 bridge 在
+  agent 作用域注册 `cindy:roster` 段；与 `ghost_list` 工具描述共用同一 formatter（双通道一致）。
+- **执行与授权不变**：`ghost_call` 的可见性校验、附件/目录 grant、确认卡、Setup 卡全部仍由 Main
+  插件基座完成，DSH 只是新入口；所有安全判定不因新通道放松。会话关闭（含进程崩溃路径）经
+  `lifecycleHooks.onClose` 注销端点注册，per-session token 不跨会话复用。
+- **SSH 远端 fail-closed**：远端 DSH 会话不生成 mcp 行、不注入 token、不传 roster（对齐 Claude/Codex
+  远端口径；Pi 的 SSH remote-forward 是既有分叉点，维持现状）。
+- **text-only 不变**：图片/文件拒绝逻辑不动。
+
+验证分层：composition / bridge 插值 / loopback 端点 401 与 token 生命周期单测、
+`dshHarness.integration.test.ts` 的真实 DSH JS + fake streamable-http MCP server 端到端用例（工具面出现
+`mcp__cindy__ghost_list`、工具调用往返、bearer token 与 env 注入值一致），加上既有的正式包 smoke 链路。
+
 ## 输入限制
 
 DSH 目前是 **text-only**：文本输入受支持，图片和文件输入不受支持。无论上游地址或模型名称如何，调用链都
@@ -294,7 +319,7 @@ pnpm check:i18n-glossary
 | 层级 | 入口与证明范围 | 不证明 |
 | --- | --- | --- |
 | 配置/来源/凭证单测 | `custom-provider-store.test.ts`、`dsh-host.test.ts`、model-providers 测试；证明 round-trip、来源隔离、兼容回退与目录投影 | 子进程和正式包 |
-| maker-core 协议集成 | `dshHarness.integration.test.ts`；普通 Node 中运行真实 DSH JS、官方 Web profile 和 fake HTTP，证明 boot/JSONL/文本流、同一用户插件进入两种 profile，以及控制台写入 `settings.yaml` 后运行中对话收到热更新 | Electron Fuses、ASAR、`utilityProcess`、真实模型 API |
+| maker-core 协议集成 | `dshHarness.integration.test.ts`；普通 Node 中运行真实 DSH JS、官方 Web profile 和 fake HTTP，证明 boot/JSONL/文本流、同一用户插件进入两种 profile、控制台写入 `settings.yaml` 后运行中对话收到热更新，以及 **Cindy 插件通道端到端**（fake streamable-http MCP server：`mcp__cindy__*` 进工具面、工具调用往返、bearer token 与 `CINDY_DSH_MCP_TOKEN` env 注入一致） | Electron Fuses、ASAR、`utilityProcess`、真实模型 API |
 | Desktop transport | `dsh-local-transport`/worker 的定向测试；证明 ready、虚拟 stdin、env 白名单、失败关闭 | 正式打包依赖闭包 |
 | 正式包 smoke | 打包后的 Electron 启动一轮 DSH；证明 worker 入包、RunAsNode 仍关闭、无 `electron.exe packaged-bin.js` 孤儿 | 用户密钥权限和上游可用性 |
 | SSH smoke | 远程 Node transport 启动并关闭 DSH | 本地 Electron transport |

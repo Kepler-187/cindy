@@ -158,6 +158,7 @@ import {
 } from './codex-proxy-host.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
 import { getGhostRosterPrompt } from '../mcp-integrations/ghost.js';
+import { createDshCindyMcpHost } from '../mcp-integrations/dshCindyMcpHost.js';
 import { invalidatePiEnvironment } from '../mcp-integrations/piEnvironment.js';
 import { getIOSSimulatorMcpDeps } from '../mcp-integrations/ios-simulator.js';
 import { readContactsSettings } from './contacts-settings-store.js';
@@ -791,6 +792,19 @@ export function getMaker(): Maker {
         };
       },
     };
+    // DSH 会话的 Cindy 插件通道 loopback host(懒启动:首个本地 DSH 会话注册时
+    // 起服务,最后一个注销后关闭)。hostDeps 与 mcp-providers 的 cindy provider
+    // 同源;SSH 远端会话绝不注册(fail-closed)。token 经 CINDY_DSH_MCP_TOKEN
+    // env 进 DSH 进程,不落盘。
+    const dshCindyMcpHost = createDshCindyMcpHost({
+      hostDeps: {
+        getLiveSessionGrantState: makerMemoryProviderDeps.getLiveSessionGrantState,
+      },
+      getLiveSessionInstanceId: (sessionId) => _maker?.getSession(sessionId)?.instanceId,
+    });
+    // sessionId → 注册时签发的 token:onClose 按 expectedToken 注销,同 sessionId
+    // 重建后旧 close 迟到不会误删新注册(代际守卫,与 codex bridge 同语义)。
+    const dshCindyMcpSessionTokens = new Map<string, string>();
     const orcaTeamStoreAdapter = createDesktopOrcaTeamStoreAdapter({
       getWorkerLink,
       updateWorkerStatus,
@@ -1971,14 +1985,33 @@ export function getMaker(): Maker {
           }
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);
           if (opts.agentKind === 'dsh') {
-            opts.vendorOptions = {
-              ...(opts.vendorOptions ?? {}),
-              ...prepareDshVendorOptions({
-                providerId: opts.providerId,
-                modelId: opts.model,
-                remoteHostId: opts.remoteHostId,
-              }),
-            };
+            // 本地 DSH 会话注册 Cindy 插件通道(loopback + per-session token);
+            // SSH 远端 / 无 workdir 不注册(fail-closed,与三 harness 远端口径一致)。
+            const registration =
+              opts.remoteHostId || !opts.workingDir
+                ? undefined
+                : await dshCindyMcpHost.registerSession(sessionId, opts.workingDir);
+            try {
+              opts.vendorOptions = {
+                ...(opts.vendorOptions ?? {}),
+                ...prepareDshVendorOptions({
+                  providerId: opts.providerId,
+                  modelId: opts.model,
+                  remoteHostId: opts.remoteHostId,
+                  dshCindyMcp: registration,
+                }),
+              };
+              if (registration) {
+                dshCindyMcpSessionTokens.set(sessionId, registration.token);
+              }
+            } catch (error) {
+              // 解析/校验失败要回滚注册,否则 token 槽残留到下一个同 id 会话。
+              if (registration) {
+                dshCindyMcpSessionTokens.delete(sessionId);
+                dshCindyMcpHost.unregisterSession(sessionId, registration.token);
+              }
+              throw error;
+            }
           }
           if (opts.agentKind === 'codex') {
             const disabledPluginIds = getPluginRegistry().getDisabledRuntimePluginIds(
@@ -2024,6 +2057,14 @@ export function getMaker(): Maker {
           await writeCodexHistoryHasProductPrompt(sessionId, historyHasProductPrompt);
         },
         onClose: async (sessionId) => {
+          // 注销 DSH 插件通道注册(幂等;非 DSH 会话无 token 槽,no-op)。
+          // 覆盖正常关闭与 transport 异常关闭(进程崩溃 → agent 终局事件 →
+          // maker close 路径 → 本钩子)两条路径。
+          const dshMcpToken = dshCindyMcpSessionTokens.get(sessionId);
+          if (dshMcpToken) {
+            dshCindyMcpSessionTokens.delete(sessionId);
+            dshCindyMcpHost.unregisterSession(sessionId, dshMcpToken);
+          }
           // rehydrate close suppression 只跳过 worktree / temp file 这类重副作用;
           // registry 必须先清,后续 resume 会在首个 /responses 前重新登记,避免旧 thread prompt 驻留。
           unregisterCodexProxyPrompt(sessionId);

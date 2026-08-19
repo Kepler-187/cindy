@@ -85,4 +85,42 @@ describe("DSH Cordis composition", () => {
     expect(yaml).toContain(`thinking: "${thinking}"`);
     expect(yaml).not.toContain("reasoningEffort:");
   });
+
+  it("emits the mcp-cindy overlay row only for sessions with a plugin-channel endpoint", () => {
+    const withMcp = renderDshCordisYaml(
+      buildDshCordisConfig({
+        provider: "deepseek-official",
+        model: "vendor-pro",
+        apiKeyEnv: "DEEPSEEK_API_KEY",
+        cwd: "C:/test-workdir",
+        sessionRoot: "C:/test-sessions",
+        mcp: { url: "http://127.0.0.1:45678/mcp" },
+      }),
+    );
+    expect(withMcp).toContain('id: "mcp-cindy"');
+    expect(withMcp).toContain('name: "@deepseek-ai/dsh-mcp-client"');
+    expect(withMcp).toContain('serverName: "cindy"');
+    expect(withMcp).toContain('transport: "streamable-http"');
+    expect(withMcp).toContain('url: "http://127.0.0.1:45678/mcp"');
+    // Authorization 必须是 `!!js` env 引用——token 只经 CINDY_DSH_MCP_TOKEN env
+    // 进子进程,明文不得出现在 YAML。
+    expect(withMcp).toContain(
+      'Authorization: !!js "\'Bearer \' + process.env.CINDY_DSH_MCP_TOKEN"',
+    );
+    expect(withMcp).not.toContain("Bearer 45678");
+    expect(withMcp).not.toContain("Bearer 32");
+
+    const withoutMcp = renderDshCordisYaml(
+      buildDshCordisConfig({
+        provider: "deepseek-official",
+        model: "vendor-pro",
+        apiKeyEnv: "DEEPSEEK_API_KEY",
+        cwd: "C:/test-workdir",
+        sessionRoot: "C:/test-sessions",
+      }),
+    );
+    expect(withoutMcp).not.toContain("mcp-cindy");
+    expect(withoutMcp).not.toContain("dsh-mcp-client");
+    expect(withoutMcp).not.toContain("CINDY_DSH_MCP_TOKEN");
+  });
 });

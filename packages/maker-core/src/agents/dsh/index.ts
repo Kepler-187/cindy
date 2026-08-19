@@ -9,7 +9,7 @@ import type { AgentKind, Effort, PermissionMode, UserContentBlock, UserMessage }
 import type { Capabilities } from '../../types/capabilities.js';
 import { BaseAgent, type AgentDeps, type AgentSessionHandle, type SendOptions, type StartSessionOptions } from '../base-agent.js';
 import { buildDshCordisConfig, renderDshCordisYaml } from './composition.js';
-import { DSH_BRIDGE_SOURCE } from './bridge-source.js';
+import { buildDshBridgeSource } from './bridge-source.js';
 import type {
   DshInitializeResult,
   DshPermissionPreset,
@@ -38,6 +38,14 @@ export interface DshVendorOptions {
   dshThinkingPolicy?: DshThinkingPolicy;
   /** DSH-owned Agent preset selected before the first turn. */
   dshAgentPreset?: string;
+  /**
+   * 本地会话的 Cindy 插件通道(dsh-mcp-client)loopback 端点,由桌面 host 在
+   * 会话启动前注册。只含 url 与 per-session bearer token;token 由本 adapter
+   * 放进子进程 env(CINDY_DSH_MCP_TOKEN),不进入 cordis.yml。
+   * 远端(SSH)会话必须不带这两个字段(fail-closed)。
+   */
+  dshCindyMcpUrl?: string;
+  dshCindyMcpToken?: string;
 }
 
 const DSH_PERMISSION_MODES = [
@@ -108,17 +116,27 @@ export class DshAgent extends BaseAgent {
         ...(vendor.dshThinkingPolicy
           ? { thinkingPolicy: vendor.dshThinkingPolicy }
           : { reasoningEffort }),
+        // 本地会话才有 Cindy 插件通道;远端 fail-closed(不生成 mcp 行)。
+        ...(!opts.remoteHostId && vendor.dshCindyMcpUrl
+          ? { mcp: { url: vendor.dshCindyMcpUrl } }
+          : {}),
       });
       const configYaml = renderDshCordisYaml(config);
+      // 花名册与三 harness 同口径:会话装配时求值一次、会话内恒定(前缀缓存
+      // 安全);远端 / 无 workingDir → 空注入(ghost-progressive-discovery §3.4)。
+      const roster = opts.remoteHostId
+        ? ''
+        : (this.deps.getGhostRosterPrompt?.({ workingDir: opts.workingDir }) ?? '');
+      const bridgeSource = buildDshBridgeSource(roster);
       if (opts.remoteHostId) {
         if (!this.deps.createRemoteDshTransport) throw new Error('dsh SSH transport is not configured by the host');
-        transport = await this.deps.createRemoteDshTransport({ remoteHostId: opts.remoteHostId, workingDir: opts.workingDir, configYaml, bridgeSource: DSH_BRIDGE_SOURCE, apiKey, sessionRoot });
+        transport = await this.deps.createRemoteDshTransport({ remoteHostId: opts.remoteHostId, workingDir: opts.workingDir, configYaml, bridgeSource, apiKey, sessionRoot });
       } else {
         tempDir = await mkdtemp(path.join(os.tmpdir(), 'cindy-dsh-'));
         const configPath = path.join(tempDir, 'cordis.yml');
         await writeFile(configPath, configYaml, 'utf8');
         const bridgePath = path.join(tempDir, 'cindy-dsh-bridge.mjs');
-        await writeFile(bridgePath, DSH_BRIDGE_SOURCE, 'utf8');
+        await writeFile(bridgePath, bridgeSource, 'utf8');
         const localInput = {
           binPath: vendor.dshBinPath ?? this.deps.binaryPath,
           configPath,
@@ -128,6 +146,11 @@ export class DshAgent extends BaseAgent {
             DEEPSEEK_API_KEY: apiKey,
             DSH_CWD: opts.workingDir,
             DSH_SESSION_ROOT: sessionRoot,
+            // per-session bearer token 只进 env;cordis.yml 的 Authorization 是
+            // `!!js` env 引用,token 明文不落盘。
+            ...(vendor.dshCindyMcpToken
+              ? { CINDY_DSH_MCP_TOKEN: vendor.dshCindyMcpToken }
+              : {}),
           },
         };
         transport = this.deps.createLocalDshTransport

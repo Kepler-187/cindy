@@ -445,4 +445,269 @@ describe('DSH Harness integration (bundled runtime + fake DeepSeek stream)', () 
       }
     },
   );
+
+  it(
+    'routes the Cindy plugin channel through the DSH MCP client (env-derived bearer token, tool surface, call round trip)',
+    { timeout: 60_000 },
+    async () => {
+      // Fake streamable-http MCP server:仅实现 initialize / tools/list /
+      // tools/call,记录收到的 Authorization 头与工具调用名。
+      const mcpSeenAuth: string[] = [];
+      const mcpToolCalls: string[] = [];
+      const mcpServer = createServer(async (req, res) => {
+        const auth = req.headers['authorization'];
+        if (typeof auth === 'string') mcpSeenAuth.push(auth);
+        if (req.method === 'GET') {
+          // SDK 客户端对 405 会退回 POST-only 流,不需要真 SSE。
+          res.writeHead(405).end();
+          return;
+        }
+        if (req.method === 'DELETE') {
+          res.writeHead(200).end();
+          return;
+        }
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(Buffer.from(chunk));
+        let body: { method?: string; id?: unknown; params?: Record<string, unknown> } = {};
+        try {
+          body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as typeof body;
+        } catch {
+          /* invalid body handled below */
+        }
+        const sendJson = (payload: unknown, headers: Record<string, string> = {}): void => {
+          res.writeHead(200, { 'content-type': 'application/json', ...headers });
+          res.end(JSON.stringify(payload));
+        };
+        if (body.method === 'initialize') {
+          sendJson(
+            {
+              jsonrpc: '2.0',
+              id: body.id,
+              result: {
+                protocolVersion: (body.params?.protocolVersion as string) ?? '2024-11-05',
+                capabilities: { tools: {} },
+                serverInfo: { name: 'cindy', version: '1.0.0' },
+              },
+            },
+            { 'mcp-session-id': randomUUID() },
+          );
+          return;
+        }
+        if (body.method === 'notifications/initialized') {
+          res.writeHead(202).end();
+          return;
+        }
+        if (body.method === 'tools/list') {
+          sendJson({
+            jsonrpc: '2.0',
+            id: body.id,
+            result: {
+              tools: [
+                {
+                  name: 'ghost_list',
+                  description: 'List installed Cindy plugins.',
+                  inputSchema: { type: 'object', properties: {} },
+                },
+              ],
+            },
+          });
+          return;
+        }
+        if (body.method === 'tools/call') {
+          mcpToolCalls.push(String(body.params?.name ?? ''));
+          sendJson({
+            jsonrpc: '2.0',
+            id: body.id,
+            result: { content: [{ type: 'text', text: '[]' }], isError: false },
+          });
+          return;
+        }
+        res.writeHead(400).end();
+      });
+      const mcpEndpoint = await listen(mcpServer);
+      const mcpToken = `${randomUUID()}-mcp-token`;
+
+      // Fake DeepSeek 流:第一轮返回 ghost_list 工具调用,第二轮返回最终文本。
+      const llmRequests: Array<{ body: Record<string, unknown> }> = [];
+      const server = createServer(async (req, res) => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(Buffer.from(chunk));
+        if (req.method !== 'POST' || req.url !== '/chat/completions') {
+          res.writeHead(404).end();
+          return;
+        }
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+        llmRequests.push({ body });
+        res.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+          connection: 'close',
+        });
+        if (llmRequests.length === 1) {
+          res.write(
+            `data: ${JSON.stringify({
+              id: 'dsh-mcp-test',
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: 'call-mcp-1',
+                        type: 'function',
+                        function: { name: 'mcp__cindy__ghost_list', arguments: '{}' },
+                      },
+                    ],
+                  },
+                  finish_reason: 'tool_calls',
+                },
+              ],
+            })}\n\n`,
+          );
+          res.write(
+            `data: ${JSON.stringify({
+              id: 'dsh-mcp-test',
+              choices: [{ index: 0, delta: {}, finish_reason: null }],
+            })}\n\n`,
+          );
+        } else {
+          res.write(
+            `data: ${JSON.stringify({
+              id: 'dsh-mcp-test',
+              choices: [{ index: 0, delta: { content: 'TOOL-OK' }, finish_reason: null }],
+            })}\n\n`,
+          );
+          res.write(
+            `data: ${JSON.stringify({
+              id: 'dsh-mcp-test',
+              choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+              usage: { prompt_tokens: 1, completion_tokens: 1 },
+            })}\n\n`,
+          );
+        }
+        res.end('data: [DONE]\n\n');
+      });
+      const endpoint = await listen(server);
+      const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'cindy-dsh-mcp-'));
+      const workingDir = path.join(tempRoot, 'workdir');
+      const sessionRoot = path.join(tempRoot, 'sessions');
+      const dshHome = path.join(tempRoot, 'home');
+      await Promise.all([mkdir(workingDir), mkdir(sessionRoot), mkdir(dshHome)]);
+
+      const originalBaseUrl = process.env.DEEPSEEK_BASE_URL;
+      const originalSnapshot = process.env.DSH_SNAPSHOT;
+      const originalHome = process.env.DSH_HOME;
+      const originalToken = process.env.CINDY_DSH_MCP_TOKEN;
+      let handle: AgentSessionHandle | undefined;
+      try {
+        delete process.env.DEEPSEEK_BASE_URL;
+        process.env.DSH_SNAPSHOT = '1';
+        process.env.DSH_HOME = dshHome;
+        delete process.env.CINDY_DSH_MCP_TOKEN;
+
+        const agent = new DshAgent({
+          binaryPath: dshLauncher(),
+          auth: {} as AgentDeps['auth'],
+          runtimeConfig: {} as AgentDeps['runtimeConfig'],
+          logger,
+        });
+        handle = await agent.startSession({
+          sessionId: 'dsh-mcp-channel',
+          workingDir,
+          model: 'deepseek-v4-pro',
+          // Full Access 预设:测试只验证 MCP 通道管线,不让 DSH 审批栈介入工具执行。
+          permissionMode: 'bypassPermissions',
+          vendorOptions: {
+            dshApiKey: 'dsh-mcp-test-key',
+            dshBaseUrl: endpoint,
+            dshModels: [
+              {
+                id: 'deepseek-v4-pro',
+                name: 'Configured Pro',
+                contextWindow: 640_000,
+              },
+            ],
+            dshReasoningEffort: 'low',
+            dshSessionRoot: sessionRoot,
+            dshBashLocal: false,
+            dshCindyMcpUrl: mcpEndpoint,
+            dshCindyMcpToken: mcpToken,
+          },
+        });
+
+        const events: AgentEvent[] = [];
+        const collectUntilDone = (async () => {
+          for await (const event of handle!.events()) {
+            events.push(event);
+            if (event.type === 'error') {
+              throw new Error(
+                (event.data as { message?: string }).message ?? 'DSH Harness reported an error',
+              );
+            }
+            if (event.type === 'done') return;
+          }
+          throw new Error('DSH event stream ended before the turn completed');
+        })();
+
+        await handle.send({
+          type: 'user',
+          content: [{ type: 'text', text: 'List the plugins.' }],
+        });
+        await withTimeout(collectUntilDone, 45_000, 'DSH MCP tool-call turn');
+
+        // 最终文本到达 = 工具调用完成并带着结果回了第二轮模型请求。
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: 'text',
+            source: 'dsh',
+            data: expect.objectContaining({ text: 'TOOL-OK' }),
+          }),
+        );
+        expect(events.some((event) => event.type === 'done')).toBe(true);
+
+        // 工具面:第一轮请求的 tools 数组必须包含 mcp__cindy__ghost_list
+        // (mcp-client 注册进 DSH 工具面的证据)。
+        expect(llmRequests.length).toBe(2);
+        const tools = llmRequests[0].body.tools as Array<{
+          type?: string;
+          function?: { name?: string };
+        }>;
+        expect(tools).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              type: 'function',
+              function: expect.objectContaining({ name: 'mcp__cindy__ghost_list' }),
+            }),
+          ]),
+        );
+
+        // 管线证据:fake MCP server 收到 tools/list + tools/call,且 bearer token
+        // 精确等于 env 注入的 per-session token(!!js env 求值链路成立)。
+        expect(mcpToolCalls).toEqual(['ghost_list']);
+        expect(mcpSeenAuth.length).toBeGreaterThan(0);
+        expect(mcpSeenAuth.every((auth) => auth === `Bearer ${mcpToken}`)).toBe(true);
+
+        // 第二轮请求带着工具结果(role=“tool”)回来。
+        const secondMessages = llmRequests[1].body.messages as Array<{
+          role?: string;
+          tool_call_id?: string;
+        }>;
+        expect(secondMessages).toContainEqual({
+          role: 'tool',
+          tool_call_id: 'call-mcp-1',
+          content: '[]',
+        });
+      } finally {
+        await handle?.close();
+        restoreEnv('DEEPSEEK_BASE_URL', originalBaseUrl);
+        restoreEnv('DSH_SNAPSHOT', originalSnapshot);
+        restoreEnv('DSH_HOME', originalHome);
+        restoreEnv('CINDY_DSH_MCP_TOKEN', originalToken);
+        await close(mcpServer);
+        await close(server);
+        await rm(tempRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    },
+  );
 });

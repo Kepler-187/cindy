@@ -5,6 +5,11 @@ import { StringDecoder } from 'node:string_decoder';
 export const name = 'cindy-dsh-bridge';
 export const inject = ['agents', 'agentPresets', 'permissionPresets', 'sessionPersistence'];
 
+// Cindy 插件花名册 system 段(会话装配时由 Cindy 侧求值后注入;SSH 远端 / 无
+// workingDir 时为 "" — 空值不注册段,宁缺勿全)。占位符整体替换为
+// JSON.stringify 字面量:插件作者可控文本永不进可执行代码。
+const ROSTER = /*__CINDY_ROSTER__*/ null;
+
 export async function apply(ctx) {
   const moduleUrl = process.env.DSH_AGENT_MODULE_URL;
   if (!moduleUrl) throw new Error('DSH_AGENT_MODULE_URL is required');
@@ -53,6 +58,11 @@ export async function apply(ctx) {
         };
         installModelSelection(agentCtx, selection);
         selections.set(agentCtx.agent, selection);
+        if (ROSTER) {
+          // 与 Claude/Codex/Pi 同一 formatter 产物的 system 段(双通道一致的
+          // 主通道);order 落在 persona(0)与工具指引(100–199)之间。
+          agentCtx.systemPrompt.section({ name: 'cindy:roster', order: 60, text: ROSTER });
+        }
         await ctx.agentPresets.mount(agentCtx, resolved);
       },
     };
@@ -213,3 +223,23 @@ export async function apply(ctx) {
     for (const dispose of disposers.splice(0)) dispose();
   }, 'cindy-dsh-bridge');
 }`;
+
+/** 花名册占位符:生成源码时整体替换为 JSON 字面量。 */
+const ROSTER_PLACEHOLDER = '/*__CINDY_ROSTER__*/ null';
+
+/**
+ * 生成 bridge 源码:roster 经 `JSON.stringify` 整体替换占位符。插件作者可控
+ * 文本(反引号、`${}`、换行、U+2028 等)永远只作为 JSON 字面量出现在数据段,
+ * 不进入可执行代码;roster 为空时生成 `""`(falsy → 运行期不注册 system 段)。
+ *
+ * JSON.stringify 不转义 U+2028/U+2029(ES2019 JSON superset 允许它们留在
+ * 字符串字面量里),这里显式转义,保证生成源码在任何解析器代际下都不含
+ * 裸行/段分隔符。安全序列化规则(固定包裹、字段级转义)由 formatter
+ * (formatGhostRoster)负责,这里只负责把成品文本安全地装进源码。
+ */
+export function buildDshBridgeSource(roster: string): string {
+  const literal = JSON.stringify(roster)
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+  return DSH_BRIDGE_SOURCE.replace(ROSTER_PLACEHOLDER, literal);
+}

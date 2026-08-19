@@ -47,6 +47,9 @@ const DSH_ENV_KEYS = [
   'DSH_SESSION_ROOT',
   'DSH_SYSTEM_PROMPT',
   'DSH_SNAPSHOT',
+  // Cindy 插件通道的 per-session bearer token(dsh-mcp-client headers 的
+  // `!!js` env 引用;token 明文不进 cordis.yml)。
+  'CINDY_DSH_MCP_TOKEN',
 ] as const;
 const MAX_JSONL_BUFFER_CHARS = 16 * 1024 * 1024;
 

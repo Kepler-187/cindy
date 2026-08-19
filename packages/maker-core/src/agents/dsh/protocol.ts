@@ -276,6 +276,13 @@ export interface DshCompositionOptions {
   reasoningEffort?: DshReasoningEffort;
   /** 模型只允许固定开/关思考时，省略无效的 reasoning-effort wire 字段。 */
   thinkingPolicy?: DshThinkingPolicy;
+  /**
+   * 可选：DSH 会话的 Cindy 插件通道（dsh-mcp-client 的 streamable-http
+   * loopback 端点）。只含 url —— bearer token 经 CINDY_DSH_MCP_TOKEN env
+   * 注入子进程，不进入任何 YAML 渲染链路。远端（SSH）会话不传本字段
+   * （fail-closed，见 docs/dsh-cindy-plugin-channel.md §4.5）。
+   */
+  mcp?: { url: string };
 }
 
 export type DshReasoningEffort = 'off' | 'low' | 'high' | 'max';

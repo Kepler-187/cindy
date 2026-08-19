@@ -93,6 +93,25 @@ export function buildDshCordisConfig(options: DshCompositionOptions): DshCordisC
           id: 'agent-presets',
           name: '@deepseek-ai/dsh-agent-presets',
         },
+        // Cindy 插件通道:本地会话才生成(远端 fail-closed,见
+        // docs/dsh-cindy-plugin-channel.md)。headers 走 `!!js` 表达式读 env,
+        // bearer token 明文不进入 YAML(与 sandbox-policy.workspaceRoot 同机制)。
+        ...(options.mcp?.url
+          ? [
+              {
+                id: 'mcp-cindy',
+                name: '@deepseek-ai/dsh-mcp-client',
+                config: {
+                  serverName: 'cindy',
+                  transport: 'streamable-http',
+                  url: options.mcp.url,
+                  headers: {
+                    Authorization: js("'Bearer ' + process.env.CINDY_DSH_MCP_TOKEN"),
+                  },
+                },
+              },
+            ]
+          : []),
         { id: 'cindy-dsh-bridge', name: './cindy-dsh-bridge.mjs' },
       ],
     },
