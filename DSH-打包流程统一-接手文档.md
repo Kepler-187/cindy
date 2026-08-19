@@ -178,7 +178,39 @@
 4. 产物验证（每次分发前）：第七节 7z 解包 + 探针验 `better_sqlite3.node` 与 node-pty 的 `.node` 全部 145；跑 `smoke-packaged.mjs`（beta 用 `--expect-passive-empty`）。
 5. 快速复打（仅当 packaged 目录已验证为 145 且无需重编时）：`pnpm --filter desktop exec npx electron-forge make --skip-package --platform=win32 --arch=x64`（env 需 CINDY_AUTH_REGION=cn、CINDY_DESKTOP_VARIANT=beta）。**这只重打 NSIS 层，不经过 ABI 校验，仅限已知-good 的 packaged 目录。**
 
----
+## 十二、完整流水线首次成功（2026-08-20，第三轮 Agent）
+
+**结果：完整打包流水线一次性成功，无挂起、产物全绿。**
+
+- 命令：`pnpm release:package --beta --region cn --no-sign --skip-smoke`，经
+  `apps/desktop/scripts/package-windows-env.ps1`（**必须用 pwsh 7 跑**：本脚本含中文
+  注释与 em-dash，PowerShell 5.1 按 ANSI 读文件会把 `—`（U+2014）误读成引号导致解析
+  失败；pwsh 7 按 UTF-8 读无 BOM 文件，正常）。本次运行约 50 分钟。
+- 关键里程碑日志（`release-package-windows.log`）：
+  - `[forge:afterCopy] rebuilding native modules ...` 后**无挂起**（TrackFileAccess=false
+    修复在 forge 进程内完整链路同样生效——此前只在独立脚本里实证过）；
+  - ABI 硬校验四连过：better-sqlite3 / conpty.node / conpty_console_list.node /
+    pty.node 全部 `NODE_MODULE_VERSION 145`；
+  - drizzle 验证：93 个 sql 文件 + journal（含用户未提交的 0092 media_invocations）。
+- 产物：`apps/desktop/release/artifacts/cn/beta/unversioned/win32-x64/cindy-beta-unversioned-Setup.exe`
+  （252,749,940 B，sha256=3f28d956eb48…，build-info.json：region=cn、beta、versionless、
+  commitSha=a9bf9d958）。
+- **产物后置验证（全部通过）**：
+  - 7z 解包安装器 → 用打包同一套 Electron（`ELECTRON_RUN_AS_NODE=1` +
+    `process.dlopen`）逐个加载包内 .node：better-sqlite3 / better_sqlite3.node /
+    conpty / conpty_console_list / koffi / node-pty / pty.node / sharp / watcher
+    全部 OK。`test_extension.node`（better-sqlite3 build/Release 里的测试夹具，
+    普通 Node 下同样不加载、app 代码零引用）是唯一例外，非运行时模块，与
+    forge-native-abi-check 的口径（按声明加载器逐个验）一致，不构成问题；
+  - `smoke-packaged.mjs --platform=win32 --arch=x64 --app-name=CindyBeta
+    --expect-passive-empty` → ✅ 通过（exe 启动、better-sqlite3 成功加载并读出
+    schema_version、空共享 profile 被结构化拒绝 MIGRATE_FAILED/schema-version-behind）；
+  - 解包 ASAR 确认：`@deepseek-ai/dsh-mcp-client` 与 `@modelcontextprotocol/sdk`
+    在包内（DSH 插件通道依赖闭包完整）。
+- 安装到 `C:\Users\kepler\AppData\Local\Programs\CindyBeta` 的覆盖安装仍未做
+  （用户机器上 Cindy 正在运行）；解包直跑 smoke 已通过，可按需在合适窗口覆盖安装。
+- 环境注意：沙箱 shell 里跑 smoke/探针需要 `windir`/`SystemRoot`/System32 PATH 与
+  `XDT_DEVICE_ID_OVERRIDE`（机器码 REG 查询在这些变量缺失时会失败）。
 
 ## 九、关键路径速查
 
