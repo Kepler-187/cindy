@@ -165,7 +165,7 @@
 
 - **完整 2 小时流水线**（`pnpm release:package --beta --region cn --no-sign --skip-smoke`，经 `scripts/package-windows-env.ps1`）未重跑——它会在开始时清掉现有 145 packaged 目录（cleanOutDir），且耗时约 2h。force:true + TrackFileAccess=false 组合已由独立重编验证，但 forge 进程内完整链路尚未复跑。**建议在合适的窗口真机跑一次**，跑完用第七节探针验产物 ABI=145 再分发。
 - **安装 smoke**（覆盖安装到 `C:\Users\kepler\AppData\Local\Programs\CindyBeta`）未做——用户机器上 Cindy 正在运行，覆盖安装会打断使用；解包产物直跑 smoke 已通过，且新包与用户确认的好包字节级一致。
-- 临时验证目录 `.tmp-abi-rebuild\`、`.tmp-verify-repack\`（含好包备份与新包解包）保留备查，删除前请与用户确认。
+- 临时验证目录已清理（2026-08-20 用户确认）：`.tmp-verify-goodpkg/`、`.tmp-verify-badpkg/`、`.tmp-abi-rebuild/`、`$dest/`、`%SystemDrive%/`、`apps/desktop/%SystemDrive%/` 及全部探针脚本已删除；**仅保留 `.tmp-verify-repack\good-package-backup.exe`**（用户确认过的 145 好包备份，241,198,164 B）与 `.tmp-verify-repack\make-nsis.log`，供完整流水线重跑前兜底。
 
 ---
 
@@ -186,7 +186,7 @@
 |---|---|
 | 好包 | `E:\Workshop\cindy\apps\desktop\out\make\nsis\x64\CindyBeta Setup 0.0.0.exe` |
 | 坏包 | `E:\Workshop\cindy\apps\desktop\release\artifacts\cn\beta\unversioned\win32-x64\cindy-beta-unversioned-Setup.exe` |
-| 已解包好/坏包 | `E:\Workshop\cindy\.tmp-verify-goodpkg\app64\...` / `.tmp-verify-badpkg\app64\...` |
+| 已解包好/坏包 | 已清理（2026-08-20）；好包备份保留于 `E:\Workshop\cindy\.tmp-verify-repack\good-package-backup.exe` |
 | 打包日志 | `E:\Workshop\cindy\release-package-cn-beta.log` |
 | 打包配置 | `apps/desktop/forge.config.ts`（L453 bundleNativeDeps / L486-588 rebuild(force:true)+ABI 硬校验 / MakerNSIS npmRebuild:false / afterCopy）；ABI 校验模块 `forge-native-abi-check.ts` |
 | 打包脚本 | `apps/desktop/scripts/package-desktop.mjs`；环境自愈版 `apps/desktop/scripts/package-windows-env.ps1`（原 Temp 的 package-cn-beta.ps1 已迁移入仓）|
