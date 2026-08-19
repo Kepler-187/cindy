@@ -225,6 +225,25 @@ worker 的 `ready` 只证明 parentPort 和虚拟 stdin 已就绪；RPC `initial
   重新选择原供应商，不能静默猜一个。
 - `initialize` 成功后才出现的 HTTP 错误：再检查 Base URL、密钥权限、网络与上游服务状态。
 
+DSH Web 控制台（`dsh web` profile）在打包版上有三个已知故障模式，根因都在「打包运行时的模块解析」，
+DSH 上游已修复（fork `Kepler-187/deepseek-harness`，Agent Note
+`2026-08-20-packaged-profile-module-resolution`，随新版 DSH 打进 CindyBeta 后生效）；旧版上按各自
+「规避」处理：
+
+- `Failed to load plugins` 且 `web boot: ... did not activate @deepseek-ai/dsh-client-app-shell:
+  pending (waiting for services: slots, sessions, layout)`：服务端 `dsh-client-modules` 把客户端插件
+  清单组合成了空（`window.__DSH_BOOT__` 的 `entries: []`），因为 `healProfilesModuleFallback` 把
+  `~/.dsh/profiles/node_modules` 的 junction 指向 app.asar 内部路径——OS 层死链。上游修复：asar 内包
+  一次性提取到 `.dsh-asar/<包名>/<版本>` 真实目录再链接。规避：在 `~/.dsh/profiles/web/node_modules/`
+  下建指向真实目录的 junction 农场（解析顺序先于共享 fallback）。
+- `DSH console failed to load: ... loader entries failed to apply`（在控制台装过外部插件后出现）：
+  打包版没有 Node internal loader，裸包名条目从 asar 内部解析，找不到 profile `node_modules` 里的
+  插件。上游修复：loader 在 internal 不可用时改按 profile baseUrl 解析。规避：在 `cordis.patch.yml`
+  里禁用插件 bundle 的裸名行，用 `./node_modules/<插件>/<入口>` 相对路径行代替。
+- 历史：`--expose-internals is required for HMR service`：profile-boot 曾在 boot 后强制挂载 HMR，
+  打包版 internal 不可用时抛错退出。修复（rc.7 已入、rc.8 重移植）：`loader.internal` 不可用时跳过
+  HMR 兜底与 config-watch 层，`cordis.patch.yml` 改动改为重启生效。
+
 对应实现入口为 `apps/desktop/src/main/maker-host/dsh-local-transport.ts`、
 `dshRuntimeWorkerProcess.ts` 和 `packages/maker-core/src/agents/dsh/transport.ts`。
 
@@ -241,6 +260,9 @@ Desktop 本地会话默认经 `apps/desktop/dsh/cindy-dsh-bin.mjs` 启动。这�
 - 用户插件会在对话进程与控制台进程内分别运行，能读取对应进程的环境；只能安装用户明确信任的本机代码。
   Cindy 不同步、不自动下载，也不代为批准这些插件；Windows 上直接引用本机 ESM 文件时，应在 patch 中使用
   `file:///C:/...` URL，避免官方 Web loader 把 `C:\...` 误当成 URL scheme；
+- 旧打包版控制台不能解析裸包名的 profile 插件（见上方排障第二条）；在那类版本上，插件行应写相对路径
+  `./node_modules/<插件>/<入口>`（Loader 会相对 profile 目录解析），或等新版 DSH 修复随包生效后恢复
+  裸包名写法；
 - launcher stdout 是 JSON-RPC 专线，插件诊断只能写 stderr。
 
 `cordis.patch.yml` 必须是顶层 YAML 数组；禁用用户层应写 `[]`，空文件、无效 YAML、插件加载失败或错误覆盖

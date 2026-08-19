@@ -210,3 +210,71 @@ web boot: 1 entry did not activate @deepseek-ai/dsh-client-app-shell: pending (w
   本机未用该命令，风险待观察。
 - 新 worker 启动时 `healProfilesModuleFallback` 仍会把共享 fallback 指回 asar（无害，
   因为 web/node_modules 优先），不要把它当回归。
+
+### 九·二、第三轮（同日晚些）：装外部插件后控制台再次打不开
+
+**现象**：用户通过 DSH 控制台装了 3 个插件（`dsh-kimi-webbridge@0.1.0`、`dsh-plugin-gate@1.2.0`、
+`dsh-plugin-sentinel`（github:BotonJ）），控制台插件管理器把它们写进
+`~/.dsh/profiles/web/package.json` 的 `dependencies` 和 `dsh.profile.bundles`，并用 pnpm
+（nodeLinker=hoisted，pnpm@10.32.1）在 `web/node_modules` 落盘。重启 CindyBeta 后控制台起不来：
+
+```
+DSH console failed to load: dsh: plugin tree failed to load: failed to apply loader entry
+include (cordis:include): loader entries failed to apply
+```
+
+**根因（已定位）**：`cordis-plugin-loader` 的 `EntryTree.import()`（lib/index.js:260-274）对
+**裸包名**的解析顺序：① 有 `loader.internal` → `internal.import(name, baseUrl)`（从 profile 目录
+解析，工作区/带 addon 的普通 node 走这里）；② 相对路径 → `import(new URL(name, baseUrl).href)`；
+③ 兜底裸 `import(name)` —— 锚点是 **cordis-plugin-loader 包自身位置**。打包版（Electron
+utilityProcess）里 `loader.internal` 两条路都断（`--expose-internals` 无效、require-builtin
+addon 缺 `GetAlignedPointerFromEmbedderData` 符号），于是外部插件的裸包名走到分支 ③，从
+**app.asar 内**解析 → 找不到 `dsh-plugin-gate` 等 3 个包 → 多个条目失败 →
+AggregateError → fail-loud 退出。rc.7 的 `boot()` 未传 `bareModuleBaseUrl`
+（`dsh-app-boot/lib/index.js:963/1166` 有该参数但 profile-boot 没用），所以打包版对外部插件
+完全不可解析（上游修法：boot 时把安装锚点作为 bareModuleBaseUrl 传入，或兜底分支改用
+baseUrl 解析）。
+
+**修复（本机已做）**：`~/.dsh/profiles/web/cordis.patch.yml`——按 id 禁用 3 个 bundle 裸名行，
+另插 3 个**相对路径**行（`./node_modules/<pkg>/<入口>`，走分支 ②，与 internal 无关）：
+`gate-profile`、`sentinel-profile`、`kimi-webbridge-profile`（config 与各自 bundle patch 一致，
+升级插件时要同步）。已验证：组合 boot 成功、3 个新行 active、manifest 38 条、client.js 200。
+
+**注意**：控制台插件管理器以后再装新插件时，大概率又写裸名 bundle 行 → 会再次打不开，需按
+同样方式补相对路径行。dsh-plugin-gate 的 peerDependencies（cordis/dsh-fs/dsh-system-prompt/
+dsh-tools/schemastery）靠 `web/node_modules/@deepseek-ai` 的 junction 农场解析到工作区，农场被
+删时同样要重建。
+
+### 九·三、第四轮（同日晚些）：上游修复已落地 fork
+
+**仓库状态**（本地 `E:\Workshop\deepseek-harness`，remote `origin`=官方、`fork`=Kepler-187）：
+
+- fork `master` 已快进到上游 rc.8（`99f6f02..141eb6fe`，12938 个提交）。
+- **最终状态（用户要求不走 PR，直接合并推送）**：fork `master` 现指向 `4e075d6b4d`，
+  即 rc.8 + 下面 3 个修复提交（分支 `fix/packaged-console-resolution` 与 master 同头，可删）：
+  1. `694cd42d06` fix(cli)：HMR 守卫重新移植（= 旧分支 40a0c914 的内容，rc.8 上仍适用，
+     旧分支 `fix/dsh-console-hmr-expose-internals` 已被其取代，未删）。
+  2. `97d6a6aa30` fix(app-boot)：`healProfilesModuleFallback` 遇到解析进 `.asar` 的包时，
+     一次性复制到 `~/.dsh/profiles/node_modules/.dsh-asar/<pkg>/<version>` 真实目录再链接
+     （staging+rename 原子性；非 asar 安装行为不变）。根治第一节的「junction 死链」问题。
+  3. `4e075d6b4d` fix(loader)：vendor 的 `EntryTree.import` 在 `loader.internal` 不可用时，
+     裸包名先按 `createRequire(ctx.baseUrl)` 解析（profile node_modules → 已修复的 fallback），
+     失败再退回安装锚点的裸 import。根治第二节的「外部插件解析不到」问题。
+     vendor 本地修改已登记 `vendor/README.md` 第 19 条。
+- 验证：app-boot 全套 108 测试（新增 heal-asar 抽取测试、loader 裸包名回退测试）、
+  cli telemetry-switch + windows-shell 9 测试全过；三个包的 `tsc -b`（含引用图）通过；
+  oxlint 0 错。pre-push 全仓 typecheck 因沙箱 PATH 未跑（exit 127），CI 覆盖。
+- 本地 CindyBeta 仍用「九·二」的相对路径行工作区补丁 + web/node_modules junction 农场，
+  不受影响；等 rc.8 重新打包后这些补丁可清理。
+- 已知代价：装了修复的打包版首次 boot 要把 ~200 个 in-box 包从 asar 复制出来（一次性，
+  几十 MB、首次启动变慢）；后续 boot 复用缓存。
+
+### 九·四、文档沉淀（2026-08-20 稍晚）
+
+- fork 按 `.agents/notes` 规范补了 Agent Note（中英 + sidecar 三件套，格式/配对/分类三个门禁全过）：
+  `.agents/notes/implemented/bug-fix/2026-08-20-packaged-profile-module-resolution.*`，
+  提交 `aaf29aaaaa`，已推到 fork master。
+- Cindy 侧 `docs/dsh-integration.md` 排障章节补了打包版三个已知故障模式（空插件清单 / 外部插件
+  loader entries failed to apply / HMR --expose-internals）与对应上游修复、旧版规避方法；
+  「本地用户插件与共享设置」补了相对路径行的建议。该改动暂未提交（Cindy 仓 PR-first，提交时机由
+  开发者决定）。
