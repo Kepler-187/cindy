@@ -24,13 +24,31 @@ import { createSshDshTransport } from './dsh-remote-transport.js';
 
 const require = createRequire(import.meta.url);
 
-function resolveDshLauncher(): string | null {
-  const override = process.env.CINDY_DSH_BIN?.trim();
-  if (override) return path.isAbsolute(override) && fs.existsSync(override) ? override : null;
+export interface ResolveDshLauncherOptions {
+  override?: string;
+  appPath?: string;
+  isPackaged?: boolean;
+  exists?: (candidate: string) => boolean;
+  resolveFallback?: () => string;
+}
+
+export function resolveDshLauncher(options: ResolveDshLauncherOptions = {}): string | null {
+  const exists = options.exists ?? fs.existsSync;
+  const override = options.override ?? process.env.CINDY_DSH_BIN?.trim();
+  if (override) return path.isAbsolute(override) && exists(override) ? override : null;
+  const appPath = options.appPath ?? app.getAppPath();
+  const launcher =
+    (options.isPackaged ?? app.isPackaged)
+      ? path.join(appPath, '.vite', 'build', 'cindy-dsh-bin.mjs')
+      : path.join(appPath, 'dsh', 'cindy-dsh-bin.mjs');
+  if (exists(launcher)) return launcher;
   try {
     // packaged-bin resolves the plugin graph from the installed DSH runtime,
     // rather than from the per-session temporary config directory.
-    return require.resolve('@deepseek-ai/dsh-sdk-jsonrpc-demo/packaged-bin');
+    return (
+      options.resolveFallback ??
+      (() => require.resolve('@deepseek-ai/dsh-sdk-jsonrpc-demo/packaged-bin'))
+    )();
   } catch {
     return null;
   }
@@ -60,12 +78,11 @@ export function buildDshAgent(
 
 type DshRuntimeProvider = Pick<Provider, 'id' | 'source' | 'auth' | 'routing' | 'models'>;
 
-function dshModels(models: readonly CatalogModel[] | undefined): NonNullable<DshVendorOptions['dshModels']> {
+function dshModels(
+  models: readonly CatalogModel[] | undefined,
+): NonNullable<DshVendorOptions['dshModels']> {
   return (models ?? []).map((model) => {
-    const maxTokens = Math.min(
-      model.maxOutput ?? DEFAULT_DSH_MAX_OUTPUT,
-      model.contextWindow,
-    );
+    const maxTokens = Math.min(model.maxOutput ?? DEFAULT_DSH_MAX_OUTPUT, model.contextWindow);
     return {
       id: model.id,
       name: model.name,

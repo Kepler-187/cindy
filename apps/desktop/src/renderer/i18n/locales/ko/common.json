@@ -5370,8 +5370,12 @@
       "projects": "프로젝트",
       "skillhub": "SkillHub",
       "plugins": "플러그인",
+      "dshConsole": "DSH 콘솔",
       "issues": "이슈"
     },
+    "dshConsoleOpenFailed": "DSH 콘솔을 열 수 없습니다.",
+    "dshConsoleStarting": "DSH 콘솔을 시작하는 중…",
+    "dshConsoleRetry": "다시 시도",
     "user": {
       "settingsLink": "설정, 현재 사용자: {{name}}",
       "canaryBadge": "Canary 사용자",

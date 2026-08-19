@@ -1,0 +1,5 @@
+- insert:
+  - id: hello-user
+    name: "E:/Workshop/cindy/.tmp/dsh-plugin-poc/user-plugins/hello/index.mjs"
+    config:
+      note: from-user-patch

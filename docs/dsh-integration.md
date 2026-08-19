@@ -218,6 +218,26 @@ worker 的 `ready` 只证明 parentPort 和虚拟 stdin 已就绪；RPC `initial
 对应实现入口为 `apps/desktop/src/main/maker-host/dsh-local-transport.ts`、
 `dshRuntimeWorkerProcess.ts` 和 `packages/maker-core/src/agents/dsh/transport.ts`。
 
+### 本地用户插件与共享设置
+
+Desktop 本地会话默认经 `apps/desktop/dsh/cindy-dsh-bin.mjs` 启动。这个薄入口不拥有 DSH 的插件流程，
+只把上游 `dsh-settings-file` 和 DSH home 级 `cordis.patch.yml` 交给 `dsh-app-boot`：
+
+- `$DSH_HOME/cordis.patch.yml`（未设置时为 `~/.dsh/cordis.patch.yml`）声明用户插件或高级配置覆盖；
+- `$DSH_HOME/settings.yaml`（未设置时为 `~/.dsh/settings.yaml`）由 DSH settings provider 读取和热更新；
+- DSH 控制台启动官方 `dsh web` profile，并传入同一个 `DSH_HOME`；因此控制台列出的插件 namespace、通过
+  `settings.*` API 保存的设置和正在运行的本地对话使用同一份用户层，`applies: live` 的 namespace 会热更新，
+  不需要重启对话；
+- 用户插件会在对话进程与控制台进程内分别运行，能读取对应进程的环境；只能安装用户明确信任的本机代码。
+  Cindy 不同步、不自动下载，也不代为批准这些插件；Windows 上直接引用本机 ESM 文件时，应在 patch 中使用
+  `file:///C:/...` URL，避免官方 Web loader 把 `C:\...` 误当成 URL scheme；
+- launcher stdout 是 JSON-RPC 专线，插件诊断只能写 stderr。
+
+`cordis.patch.yml` 必须是顶层 YAML 数组；禁用用户层应写 `[]`，空文件、无效 YAML、插件加载失败或错误覆盖
+都会让该 DSH 会话 fail-loud。恢复默认时删除或修复 `cordis.patch.yml`，不要让 Cindy 写回一份默认快照。
+`settings.yaml` 无效时同样应修复或删除该文件；删除后各 namespace 回到插件组装的默认值。当前这两份本地配置
+只作用于本机 DSH；SSH 会话使用远端主机自己的 DSH home，不与本机同步。
+
 ## 输入限制
 
 DSH 目前是 **text-only**：文本输入受支持，图片和文件输入不受支持。无论上游地址或模型名称如何，调用链都
@@ -242,7 +262,7 @@ pnpm check:i18n-glossary
 | 层级 | 入口与证明范围 | 不证明 |
 | --- | --- | --- |
 | 配置/来源/凭证单测 | `custom-provider-store.test.ts`、`dsh-host.test.ts`、model-providers 测试；证明 round-trip、来源隔离、兼容回退与目录投影 | 子进程和正式包 |
-| maker-core 协议集成 | `dshHarness.integration.test.ts`；普通 Node 中运行真实 DSH JS 和 fake HTTP，证明 boot/JSONL/文本流 | Electron Fuses、ASAR、`utilityProcess`、真实 API |
+| maker-core 协议集成 | `dshHarness.integration.test.ts`；普通 Node 中运行真实 DSH JS、官方 Web profile 和 fake HTTP，证明 boot/JSONL/文本流、同一用户插件进入两种 profile，以及控制台写入 `settings.yaml` 后运行中对话收到热更新 | Electron Fuses、ASAR、`utilityProcess`、真实模型 API |
 | Desktop transport | `dsh-local-transport`/worker 的定向测试；证明 ready、虚拟 stdin、env 白名单、失败关闭 | 正式打包依赖闭包 |
 | 正式包 smoke | 打包后的 Electron 启动一轮 DSH；证明 worker 入包、RunAsNode 仍关闭、无 `electron.exe packaged-bin.js` 孤儿 | 用户密钥权限和上游可用性 |
 | SSH smoke | 远程 Node transport 启动并关闭 DSH | 本地 Electron transport |

@@ -24,7 +24,11 @@ const entryPath = process.argv[2];
 const configPath = process.argv[3];
 
 if (!parentPort) throw new Error('DSH utility process is missing parentPort');
-if (typeof entryPath !== 'string' || !path.isAbsolute(entryPath) || !entryPath.endsWith('.js')) {
+if (
+  typeof entryPath !== 'string' ||
+  !path.isAbsolute(entryPath) ||
+  !['.js', '.mjs'].includes(path.extname(entryPath))
+) {
   throw new Error('DSH utility process entry is invalid');
 }
 if (typeof configPath !== 'string' || !path.isAbsolute(configPath)) {

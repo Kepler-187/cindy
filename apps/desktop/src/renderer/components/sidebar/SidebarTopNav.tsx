@@ -1,7 +1,7 @@
 /**
  * SidebarTopNav —— 侧栏顶部常驻动作/导航列表(取代原 HorizontalTabbar)。
  * ---------------------------------------------------------------------------
- * 一条同级、等权的列表行,按顺序:新建 / 自动任务 / Plugins / 搜索。
+ * 一条同级、等权的列表行,按顺序:新建 / 自动任务 / Plugins / 搜索 / DSH 控制台。
  *   - 新建 / 自动任务:项目(cc-agent)视图的动作 —— 在任意视图点击都跳回项目视图并执行。
  *   - Plugins:主视图切换(navigateToView),命中当前视图时高亮。
  *   - 搜索(SidebarInlineSearch):静息态与其余行同款「🔍 搜索」;hover / 聚焦
@@ -19,14 +19,16 @@
  */
 
 import { useCallback } from 'react';
-import { CirclePlus, Plug, Timer } from 'lucide-react';
+import { CirclePlus, Plug, SquareTerminal, Timer } from 'lucide-react';
 import { useNavigate, useMatch } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { providersForAgent } from '@cindy/model-providers';
 
 import { cn } from '@/lib/utils';
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
+import { useProviders } from '@/hooks/useProviders';
 import { SidebarInlineSearch } from '@/features/cc-agent/sidebar/SidebarInlineSearch';
 import { useConversationSearchContext } from '@/features/cc-agent/sidebar/conversationSearchContext';
 
@@ -61,6 +63,8 @@ export function SidebarTopNav({
   const { activeKey, navigateToView } = useActiveMainView();
   const onScheduleMatch = useMatch('/cc-agent/scheduled');
   const { search, allKnownProjects, openSignal } = useConversationSearchContext();
+  const { providers } = useProviders();
+  const hasDshRuntime = providersForAgent(providers, 'dsh').length > 0;
   // 任一插件有未读 → 入口行尾一颗**静态**绿点(聚合入口按 AttentionDot 规范不呼吸,
   // 呼吸留给单条卡片;见 AttentionDot 头部的形态规范)。
   const hasGhostUnread = useAnyGhostUnread();
@@ -132,6 +136,31 @@ export function SidebarTopNav({
       onSearchActive={ensureConversationView}
     />
   ) : null;
+  const dshConsoleRow =
+    showScrollable && hasDshRuntime ? (
+      <button
+        onClick={() => {
+          navigate('/dsh-console', {
+            state: { startRequestId: Date.now() },
+          });
+        }}
+        className={cn(ROW_CLASS, activeKey === 'dsh-console' && ROW_ACTIVE_CLASS)}
+        aria-label={t('sidebar.tabs.dshConsole')}
+        aria-current={activeKey === 'dsh-console' ? 'page' : undefined}
+      >
+        <SquareTerminal
+          size={15}
+          strokeWidth={1.8}
+          className={cn(
+            'shrink-0',
+            activeKey === 'dsh-console'
+              ? 'text-sidebar-item-active-foreground'
+              : 'text-[var(--sidebar-nav-text)]',
+          )}
+        />
+        <span className="leading-none">{t('sidebar.tabs.dshConsole')}</span>
+      </button>
+    ) : null;
 
   // 滚动段把搜索行拆成滚动容器的直接子项:sticky 才能钉在结果列表上,
   // 不被短导航父盒的底边提前带走。输入框仍是同一份实例。
@@ -151,6 +180,7 @@ export function SidebarTopNav({
         >
           {searchRow}
         </div>
+        {dshConsoleRow && <div className="px-3 pb-2.5 -mt-2">{dshConsoleRow}</div>}
       </>
     );
   }
@@ -181,6 +211,7 @@ export function SidebarTopNav({
       {automationsRow}
       {pluginsRow}
       {searchRow}
+      {dshConsoleRow}
     </div>
   );
 }

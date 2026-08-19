@@ -207,6 +207,10 @@ OAuth 2.0 Device Authorization Grant 中由用户在另一设备验证页输入�
 
 钉钉机器人连接的产品名称，沿用官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。
 
+### DSH Console
+
+DeepSeek Harness 自带的本地 Web 管理界面。Cindy 只提供启动与打开入口，设置、插件和执行流程仍由 DSH 拥有；先登记为 proposed，待快速验证后再固化。
+
 ### embedding
 
 文本转成的数值向量，用于语义检索。zh-CN 用「向量」而非「嵌入」——设置页的模型分组、UnifiedModelList 的能力分类既有注释都已用「向量」，「嵌入」在中文里更容易被读成动作。指模型本身时说「向量模型」，不说「嵌入模型」。插件 cindy.embed 能力与 embedding-client 的四语文案使用。

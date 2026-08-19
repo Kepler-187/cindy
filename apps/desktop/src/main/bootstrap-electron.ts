@@ -15,6 +15,7 @@ import {
   session,
   shell,
   Tray,
+  webContents as electronWebContents,
   type WebContents,
 } from 'electron';
 import { resolveVibrancyConfig } from './vibrancyConfig';
@@ -38,6 +39,8 @@ import {
 } from './devStartupStatus';
 import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
 import { handleOpenChatGPTApp } from './chatgpt-app.js';
+import { registerDshConsoleIpc } from './maker-host/dsh-console-ipc.js';
+import { DshConsoleProcess, resolveDshConsoleCliPath } from './maker-host/dsh-console-process.js';
 import {
   waitForTurnChangeSetActions,
   waitForTurnChangeSetPersistence,
@@ -961,10 +964,7 @@ const _scheduleIpcRegistered = new WeakSet<object>();
  */
 function isChatEmbeddingAvailable(): boolean {
   try {
-    return isCindyEmbeddingModelAvailable(
-      getDesktopSelectableCatalog(),
-      CHAT_EMBED_MODEL_ID,
-    );
+    return isCindyEmbeddingModelAvailable(getDesktopSelectableCatalog(), CHAT_EMBED_MODEL_ID);
   } catch {
     return false;
   }
@@ -1059,7 +1059,9 @@ function scheduleChatEmbeddingRuntimeReconcile(): void {
       }
     })
     .catch((err: unknown) => {
-      createSchedulerLogger('chat-embedding-runtime').error('reconcile failed', { error: String(err) });
+      createSchedulerLogger('chat-embedding-runtime').error('reconcile failed', {
+        error: String(err),
+      });
     });
 }
 
@@ -1118,6 +1120,13 @@ const rendererConsoleLog = createLogger('renderer-console');
 const updatePresentationLog = createLogger('update-presentation');
 const voicePowerBroadcastLog = createLogger('voice-input-power');
 const sessionDragPreviewLog = createLogger('session-drag-preview');
+const dshConsoleProcess = new DshConsoleProcess({
+  cliPath: resolveDshConsoleCliPath(),
+  workerPath: path.join(__dirname, 'dshConsoleWorkerProcess.js'),
+  cwd: os.homedir(),
+  env: process.env,
+  logger: createLogger('dsh-console'),
+});
 let rendererBootGuard: RendererBootGuard | null = null;
 
 const lifecycleDbClientManager = createLifecycleDbClientManager({
@@ -1373,7 +1382,10 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   }
 
   if (blockingFailures.length > 0) {
-    throw new AggregateError(blockingFailures, `account boundary teardown on ${reason} was incomplete`);
+    throw new AggregateError(
+      blockingFailures,
+      `account boundary teardown on ${reason} was incomplete`,
+    );
   }
 }
 
@@ -1653,7 +1665,11 @@ const ghostPanelWindowsController = new GhostPanelWindowsController({
     }
   },
   sendToWindow: (win, channel, payload) => {
-    try { win.webContents.send(channel, payload); } catch { /* ignore */ }
+    try {
+      win.webContents.send(channel, payload);
+    } catch {
+      /* ignore */
+    }
   },
   isQuitting: () => isQuitting,
   log: createLogger('ghost-panel-window-controller'),
@@ -5029,6 +5045,13 @@ const registerIpcHandlers = () => {
     }),
   );
 
+  registerDshConsoleIpc({
+    ipcMain,
+    process: dshConsoleProcess,
+    assertTrustedSender: assertTrustedAppRendererEvent,
+    lookupWebContents: (id) => electronWebContents.fromId(id),
+  });
+
   // Show native directory picker dialog
   ipcMain.handle(
     'show-open-directory-dialog',
@@ -7374,6 +7397,7 @@ onQuit(
 // (clean-exit-snapshot 已移除 — 退出时不再做 db.backup, 容灾改由 SQLite WAL crash
 //  recovery 兜底, 详见 localDb/index.ts 文件头 ADR-FE7 修订说明。)
 onQuit('shutdown-maker', shutdownMaker, 'async');
+onQuit('dsh-console-process', () => dshConsoleProcess.dispose(), 'async');
 onQuit('review-artifact-snapshots', cleanupActiveReviewArtifactSnapshots, 'async');
 onQuit('orca-idle-watcher', () => stopOrcaIdleWatcher(), 'sync');
 onQuit('im', () => stopImConnection('quit'), 'async');
@@ -7516,7 +7540,10 @@ function parseVisionBridgeSettingsPatch(raw: unknown): Partial<VisionBridgeSetti
     // trim 后拒绝空白元素，避免脏值（" deepseek " / "  "）落盘。
     const trimmed = input.targetModels.map((m) => (typeof m === 'string' ? m.trim() : ''));
     if (trimmed.some((m) => m.length === 0)) {
-      throwIpcError('INVALID_PARAMS', 'vision bridge targetModels must be a non-blank string array');
+      throwIpcError(
+        'INVALID_PARAMS',
+        'vision bridge targetModels must be a non-blank string array',
+      );
     }
     patch.targetModels = trimmed;
   }
@@ -7528,11 +7555,17 @@ function parseVisionBridgeSettingsPatch(raw: unknown): Partial<VisionBridgeSetti
       continue;
     }
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      throwIpcError('INVALID_PARAMS', `vision bridge ${key} must be { providerId, modelId } or null`);
+      throwIpcError(
+        'INVALID_PARAMS',
+        `vision bridge ${key} must be { providerId, modelId } or null`,
+      );
     }
     const ref = value as Record<string, unknown>;
     if (typeof ref.providerId !== 'string' || typeof ref.modelId !== 'string') {
-      throwIpcError('INVALID_PARAMS', `vision bridge ${key} must be { providerId, modelId } or null`);
+      throwIpcError(
+        'INVALID_PARAMS',
+        `vision bridge ${key} must be { providerId, modelId } or null`,
+      );
     }
     // trim 后拒绝纯空白，避免脏配置（空白串）落盘。
     const providerId = ref.providerId.trim();

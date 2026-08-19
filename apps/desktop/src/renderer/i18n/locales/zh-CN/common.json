@@ -5370,8 +5370,12 @@
       "projects": "项目",
       "skillhub": "技能",
       "plugins": "插件",
+      "dshConsole": "DSH 控制台",
       "issues": "Issue"
     },
+    "dshConsoleOpenFailed": "无法打开 DSH 控制台。",
+    "dshConsoleStarting": "正在启动 DSH 控制台…",
+    "dshConsoleRetry": "重试",
     "user": {
       "settingsLink": "设置，当前用户：{{name}}",
       "canaryBadge": "灰度用户",

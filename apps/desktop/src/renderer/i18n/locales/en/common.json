@@ -5372,8 +5372,12 @@
       "projects": "Projects",
       "skillhub": "SkillHub",
       "plugins": "Plugins",
+      "dshConsole": "DSH Console",
       "issues": "Issues"
     },
+    "dshConsoleOpenFailed": "Could not open the DSH Console.",
+    "dshConsoleStarting": "Starting DSH Console…",
+    "dshConsoleRetry": "Retry",
     "user": {
       "settingsLink": "Settings, current user: {{name}}",
       "canaryBadge": "Canary user",

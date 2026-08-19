@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Catalog } from '@cindy/model-providers';
@@ -12,7 +14,61 @@ vi.mock('../active-catalog.js', () => ({ getActiveCatalog: vi.fn() }));
 vi.mock('../runtime-configs.js', () => ({ buildDesktopClaudeRuntimeConfig: vi.fn() }));
 vi.mock('../dsh-remote-transport.js', () => ({ createSshDshTransport: vi.fn() }));
 
-import { resolveDshVendorOptions } from '../dsh-host.js';
+import { resolveDshLauncher, resolveDshVendorOptions } from '../dsh-host.js';
+
+describe('resolveDshLauncher', () => {
+  it('uses an explicit absolute override without falling through', () => {
+    const override = path.resolve('dsh-test', 'custom-launcher.mjs');
+    const resolveFallback = vi.fn(() => 'fallback.js');
+    expect(
+      resolveDshLauncher({
+        override,
+        exists: (candidate) => candidate === override,
+        appPath: path.resolve('app'),
+        resolveFallback,
+      }),
+    ).toBe(override);
+    expect(resolveFallback).not.toHaveBeenCalled();
+  });
+
+  it('prefers the Cindy launcher in development and packaged layouts', () => {
+    const devAppPath = path.resolve('workspace', 'apps', 'desktop');
+    expect(
+      resolveDshLauncher({
+        appPath: devAppPath,
+        isPackaged: false,
+        exists: (candidate) => candidate.endsWith(path.join('dsh', 'cindy-dsh-bin.mjs')),
+      }),
+    ).toBe(path.join(devAppPath, 'dsh', 'cindy-dsh-bin.mjs'));
+
+    const packagedAppPath = path.resolve('Cindy', 'resources', 'app.asar');
+    expect(
+      resolveDshLauncher({
+        appPath: packagedAppPath,
+        isPackaged: true,
+        exists: (candidate) => candidate.endsWith(path.join('.vite', 'build', 'cindy-dsh-bin.mjs')),
+      }),
+    ).toBe(path.join(packagedAppPath, '.vite', 'build', 'cindy-dsh-bin.mjs'));
+  });
+
+  it('retains packaged-bin as the fallback and rejects invalid overrides', () => {
+    expect(
+      resolveDshLauncher({
+        appPath: path.resolve('app'),
+        isPackaged: false,
+        exists: () => false,
+        resolveFallback: () => path.resolve('runtime', 'packaged-bin.js'),
+      }),
+    ).toBe(path.resolve('runtime', 'packaged-bin.js'));
+    expect(
+      resolveDshLauncher({
+        override: '.\\relative.mjs',
+        appPath: path.resolve('app'),
+        exists: () => true,
+      }),
+    ).toBeNull();
+  });
+});
 
 const catalog: Catalog = {
   version: 'dsh-host-test',
@@ -113,26 +169,30 @@ describe('resolveDshVendorOptions', () => {
     const model = provider.models.dsh![0]!;
     const modified: Catalog = {
       ...catalog,
-      providers: [{
-        ...provider,
-        routing: {
-          dsh: {
-            ...provider.routing.dsh!,
-            upstream: 'https://gateway.example.test/deepseek///',
+      providers: [
+        {
+          ...provider,
+          routing: {
+            dsh: {
+              ...provider.routing.dsh!,
+              upstream: 'https://gateway.example.test/deepseek///',
+            },
+          },
+          models: {
+            dsh: [{ ...model, maxOutput: 999_999 }],
           },
         },
-        models: {
-          dsh: [{ ...model, maxOutput: 999_999 }],
-        },
-      }],
+      ],
     };
 
-    expect(resolveDshVendorOptions({
-      catalog: modified,
-      providerId: 'dsh-gateway',
-      modelId: 'gateway-pro',
-      readCustomKey: () => 'key',
-    })).toMatchObject({
+    expect(
+      resolveDshVendorOptions({
+        catalog: modified,
+        providerId: 'dsh-gateway',
+        modelId: 'gateway-pro',
+        readCustomKey: () => 'key',
+      }),
+    ).toMatchObject({
       dshBaseUrl: 'https://gateway.example.test/deepseek',
       dshModels: [expect.objectContaining({ maxTokens: 640_000 })],
     });
@@ -146,12 +206,14 @@ describe('resolveDshVendorOptions', () => {
       dshReasoningEffort: 'off' | 'high',
     ): Catalog => ({
       ...catalog,
-      providers: [{
-        ...provider,
-        models: {
-          dsh: [{ ...model, dshThinkingPolicy, dshReasoningEffort }],
+      providers: [
+        {
+          ...provider,
+          models: {
+            dsh: [{ ...model, dshThinkingPolicy, dshReasoningEffort }],
+          },
         },
-      }],
+      ],
     });
 
     const alwaysOn = resolveDshVendorOptions({
@@ -212,7 +274,10 @@ describe('resolveDshVendorOptions', () => {
     };
     expect(() =>
       resolveDshVendorOptions({
-        catalog: { ...legacySessionCatalog, providers: [...legacySessionCatalog.providers, second] },
+        catalog: {
+          ...legacySessionCatalog,
+          providers: [...legacySessionCatalog.providers, second],
+        },
         providerId: 'custom:deepseek',
         modelId: 'deepseek-v4-flash',
         readCustomKey: () => 'key',

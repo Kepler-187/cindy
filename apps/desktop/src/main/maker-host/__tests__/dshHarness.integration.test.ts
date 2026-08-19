@@ -1,8 +1,10 @@
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { createRequire } from 'node:module';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 
 import {
   DshAgent,
@@ -11,8 +13,6 @@ import {
   type AgentSessionHandle,
 } from '@cindy/maker-core';
 import { describe, expect, it } from 'vitest';
-
-const require = createRequire(import.meta.url);
 
 const logger: AgentDeps['logger'] = {
   trace() {},
@@ -27,7 +27,20 @@ const logger: AgentDeps['logger'] = {
 };
 
 function dshLauncher(): string {
-  return require.resolve('@deepseek-ai/dsh-sdk-jsonrpc-demo/packaged-bin');
+  return path.resolve(process.cwd(), 'dsh', 'cindy-dsh-bin.mjs');
+}
+
+function dshWebCli(): string {
+  return path.resolve(
+    process.cwd(),
+    '..',
+    '..',
+    'node_modules',
+    '@deepseek-ai',
+    'dsh',
+    'lib',
+    'bin.js',
+  );
 }
 
 function restoreEnv(name: string, value: string | undefined): void {
@@ -68,6 +81,93 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+async function waitFor(
+  predicate: () => Promise<boolean>,
+  timeoutMs: number,
+  label: string,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`${label} timed out after ${timeoutMs}ms`);
+}
+
+async function startDshWeb(dshHome: string): Promise<{
+  child: ChildProcessWithoutNullStreams;
+  url: string;
+  stderr: () => string;
+}> {
+  const child = spawn(
+    process.execPath,
+    ['--expose-internals', dshWebCli(), 'web', '--host', '127.0.0.1', '--port', '0'],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env, DSH_HOME: dshHome },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    },
+  );
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
+    stderr += chunk;
+  });
+  const url = await withTimeout(
+    new Promise<string>((resolve, reject) => {
+      const readReady = (): void => {
+        const match = /^dsh web: (http:\/\/127\.0\.0\.1:\d+)\/?\s*$/m.exec(stdout);
+        if (match) resolve(`${match[1]}/`);
+      };
+      child.stdout.on('data', readReady);
+      child.once('error', reject);
+      child.once('exit', (code) => reject(new Error(`dsh web exited (code=${code}); ${stderr}`)));
+      readReady();
+    }),
+    30_000,
+    'DSH web readiness',
+  );
+  return { child, url, stderr: () => stderr };
+}
+
+async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await Promise.race([
+    new Promise<void>((resolve) => child.once('exit', () => resolve())),
+    new Promise<void>((resolve) => {
+      setTimeout(() => {
+        child.kill('SIGKILL');
+        resolve();
+      }, 2_000).unref?.();
+      child.kill();
+    }),
+  ]);
+}
+
+async function callDshWebApi<T>(
+  baseUrl: string,
+  method: string,
+  payload: Record<string, unknown>,
+): Promise<T> {
+  const rpcId = randomUUID();
+  const response = await fetch(new URL(`/api/${method}`, baseUrl), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ type: 'client-request', rpcId, method, payload }),
+  });
+  if (!response.ok) throw new Error(`${method} failed with HTTP ${response.status}`);
+  const envelope = (await response.json()) as {
+    rpcId: string;
+    result: { ok: true; value: T } | { ok: false; error: { message: string } };
+  };
+  if (envelope.rpcId !== rpcId) throw new Error(`${method} returned a mismatched rpcId`);
+  if (!envelope.result.ok) throw new Error(`${method} failed: ${envelope.result.error.message}`);
+  return envelope.result.value;
 }
 
 describe('DSH Harness integration (bundled runtime + fake DeepSeek stream)', () => {
@@ -113,13 +213,51 @@ describe('DSH Harness integration (bundled runtime + fake DeepSeek stream)', () 
       const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'cindy-dsh-harness-'));
       const workingDir = path.join(tempRoot, 'workdir');
       const sessionRoot = path.join(tempRoot, 'sessions');
-      await Promise.all([mkdir(workingDir), mkdir(sessionRoot)]);
+      const dshHome = path.join(tempRoot, 'home');
+      const markerPath = path.join(tempRoot, 'user-plugin-loaded.txt');
+      const pluginPath = path.join(tempRoot, 'user-marker.mjs');
+      const dshSettingsUrl = pathToFileURL(
+        path.resolve(
+          process.cwd(),
+          '..',
+          '..',
+          'node_modules',
+          '@deepseek-ai',
+          'dsh-settings',
+          'lib',
+          'index.js',
+        ),
+      ).href;
+      const schemasteryUrl = pathToFileURL(
+        path.resolve(
+          process.cwd(),
+          '..',
+          '..',
+          'node_modules',
+          '@deepseek-ai',
+          'schemastery',
+          'lib',
+          'index.mjs',
+        ),
+      ).href;
+      await Promise.all([mkdir(workingDir), mkdir(sessionRoot), mkdir(dshHome)]);
+      await writeFile(
+        pluginPath,
+        `import { appendFileSync } from 'node:fs';\nimport { settingsNamespace } from ${JSON.stringify(dshSettingsUrl)};\nimport z from ${JSON.stringify(schemasteryUrl)};\nconst schema = z.object({ marker: z.string().default('initial') });\nexport default function apply(ctx, config) {\n  ctx.inject(['settings'], (settingsCtx) => {\n    const scope = settingsCtx.settings.register(settingsNamespace('cindy-integration'), schema);\n    appendFileSync(config.markerPath, 'boot:' + process.pid + ':' + scope.get().marker + '\\n', 'utf8');\n    scope.watch((next) => appendFileSync(config.markerPath, 'update:' + process.pid + ':' + next.marker + '\\n', 'utf8'));\n  });\n}\n`,
+        'utf8',
+      );
+      await writeFile(
+        path.join(dshHome, 'cordis.patch.yml'),
+        `- insert:\n  - id: user-integration-marker\n    name: ${JSON.stringify(pathToFileURL(pluginPath).href)}\n    config:\n      markerPath: ${JSON.stringify(markerPath)}\n`,
+        'utf8',
+      );
 
       const originalBaseUrl = process.env.DEEPSEEK_BASE_URL;
       const originalSnapshot = process.env.DSH_SNAPSHOT;
       const originalHome = process.env.DSH_HOME;
       const originalSystemPrompt = process.env.DSH_SYSTEM_PROMPT;
       let handle: AgentSessionHandle | undefined;
+      let web: Awaited<ReturnType<typeof startDshWeb>> | undefined;
       try {
         // The only network target is this loopback server. Keep every DSH file
         // (including its anonymous id) beneath the disposable test directory.
@@ -127,7 +265,7 @@ describe('DSH Harness integration (bundled runtime + fake DeepSeek stream)', () 
         // configuration, not from the ambient developer environment.
         delete process.env.DEEPSEEK_BASE_URL;
         process.env.DSH_SNAPSHOT = '1';
-        process.env.DSH_HOME = path.join(tempRoot, 'home');
+        process.env.DSH_HOME = dshHome;
         process.env.DSH_SYSTEM_PROMPT = 'Reply with exactly OK.';
 
         const agent = new DshAgent({
@@ -155,6 +293,66 @@ describe('DSH Harness integration (bundled runtime + fake DeepSeek stream)', () 
             dshBashLocal: false,
           },
         });
+
+        await waitFor(
+          async () => (await readFile(markerPath, 'utf8').catch(() => '')).includes('boot:'),
+          10_000,
+          'conversation user plugin boot',
+        );
+        web = await startDshWeb(dshHome);
+        const described = await callDshWebApi<{
+          writable: boolean;
+          hasDocument: boolean;
+          namespaces: Array<{
+            ns: string;
+            value: unknown;
+            revision: number;
+          }>;
+        }>(web.url, 'settings.describe', {});
+        const integrationSettings = described.namespaces.find(
+          (entry) => entry.ns === 'cindy-integration',
+        );
+        expect(described).toMatchObject({ writable: true, hasDocument: true });
+        expect(integrationSettings).toMatchObject({
+          ns: 'cindy-integration',
+          value: { marker: 'initial' },
+        });
+        const inventory = await callDshWebApi<{
+          entries: Array<{
+            entryId: string;
+            enabled: boolean;
+            fiberPhase: string;
+          }>;
+        }>(web.url, 'pluginInventory/list', { args: {} });
+        expect(inventory.entries).toContainEqual(
+          expect.objectContaining({
+            entryId: 'include:user-integration-marker',
+            enabled: true,
+            fiberPhase: 'active',
+          }),
+        );
+
+        await callDshWebApi(web.url, 'settings.mutate', {
+          ns: 'cindy-integration',
+          ops: [{ op: 'set', path: ['marker'], value: 'written-through-web' }],
+          expectedRevision: integrationSettings!.revision,
+        });
+        await waitFor(
+          async () => {
+            const lines = (await readFile(markerPath, 'utf8').catch(() => '')).trim().split('\n');
+            const updatedPids = new Set(
+              lines
+                .filter((line) => line.endsWith(':written-through-web'))
+                .map((line) => line.split(':')[1]),
+            );
+            return updatedPids.size >= 2;
+          },
+          10_000,
+          'shared settings hot update in conversation and web processes',
+        );
+        expect(await readFile(path.join(dshHome, 'settings.yaml'), 'utf8')).toContain(
+          'written-through-web',
+        );
 
         const events: AgentEvent[] = [];
         const collectUntilDone = (async () => {
@@ -196,7 +394,16 @@ describe('DSH Harness integration (bundled runtime + fake DeepSeek stream)', () 
         const messages = requests[0].body.messages as Array<{ role?: string; content?: unknown }>;
         expect(messages).toContainEqual({ role: 'user', content: 'Return the word OK.' });
         expect(messages.every((message) => typeof message.content === 'string')).toBe(true);
+        const markerLines = (await readFile(markerPath, 'utf8')).trim().split('\n');
+        expect(
+          new Set(
+            markerLines
+              .filter((line) => line.startsWith('boot:'))
+              .map((line) => line.split(':')[1]),
+          ).size,
+        ).toBeGreaterThanOrEqual(2);
       } finally {
+        if (web) await stopChild(web.child);
         await handle?.close();
         restoreEnv('DEEPSEEK_BASE_URL', originalBaseUrl);
         restoreEnv('DSH_SNAPSHOT', originalSnapshot);

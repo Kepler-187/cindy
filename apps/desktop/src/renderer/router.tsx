@@ -24,6 +24,7 @@ import { SkillhubMarketListView } from '@/features/skillhub/SkillhubMarketListVi
 import { MakerExperimentalView } from '@/features/maker-experimental/MakerExperimentalView';
 import { SchedulerPage } from '@/features/scheduler';
 import { GhostPluginPage } from '@/features/plugin/GhostPluginPage';
+import { DshConsoleView } from '@/features/dsh-console/DshConsoleView';
 
 /**
  * 三层路由架构：
@@ -153,6 +154,7 @@ export const router = createHashRouter([
                   },
                   { path: 'settings', element: <SettingsView /> },
                   { path: 'plugins', element: <GhostPluginPage /> },
+                  { path: 'dsh-console', element: <DshConsoleView /> },
                   {
                     path: 'billing',
                     element: <Navigate to="/settings?tab=billing" replace />,
