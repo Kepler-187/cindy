@@ -22,6 +22,7 @@ import {
 } from '@cindy/maker-shared/brand-identity';
 import { stageMacIOSSimulatorHelper } from './forge-ios-simulator-helper';
 import { stagePackagedThirdPartyNotices } from './forge-third-party-notices';
+import { assertNativeModuleAbi } from './forge-native-abi-check';
 
 const _require = createRequire(__filename);
 const DESKTOP_PACKAGE_VERSION = (_require('./package.json') as { version: string }).version;
@@ -486,9 +487,12 @@ function bundleNativeDeps(buildPath: string, targetPlatform: string, targetArch:
 // 即使根 node_modules 里的 .node 是 Node ABI（pnpm install 默认），也会被 Electron ABI
 // 覆盖重编。编完的 .node 落在 build/Release/better_sqlite3.node,下游
 // AutoUnpackNativesPlugin 会在 asar 打包时把它提取到 app.asar.unpacked/。
+// 编完后还会用打包同一套 Electron 的加载器做 ABI 硬校验（fail closed，见
+// forge-native-abi-check.ts），杜绝「rebuild 日志成功但包内仍是 Node ABI」的坏包。
 async function rebuildNativeDepsInPackage(
   buildPath: string,
   electronVersion: string,
+  platform: string,
   arch: string,
 ): Promise<void> {
   console.log(
@@ -498,6 +502,12 @@ async function rebuildNativeDepsInPackage(
     buildPath,
     electronVersion,
     arch,
+    // force:true 是红线：root node_modules 的 better-sqlite3 是 Node ABI 137
+    // （pnpm install 默认），bundleNativeDeps 把它拷进 packaged 后必须强制重编成
+    // Electron ABI 145。历史上有人为绕过打包机 MSBuild 问题临时改成 force:false +
+    // 预置 .forge-meta 跳过重编，结果「rebuild 日志成功」但包内仍是 137，装完启动
+    // 即 DB INIT FAILED——好包/坏包全凭 packaged 目录里碰巧是哪份 .node。
+    // 任何「跳过重编」的捷径都不得进入提交。
     force: true,
     onlyModules: ['better-sqlite3', 'node-pty'],
   });
@@ -512,18 +522,25 @@ async function rebuildNativeDepsInPackage(
   if (!fs.existsSync(sqliteNative)) {
     throw new Error(`[forge:afterCopy] rebuild reported success but ${sqliteNative} is missing`);
   }
-  // node-pty 的 .node 在 build/Release/pty.node;Windows 上同名,Linux/macOS 同名。
-  // 跟 better-sqlite3 一样,缺了直接抛出,避免发出无法启动 PTY 的包。
-  const ptyNative = path.join(
+  // node-pty 的主 addon 随平台/版本变化:
+  //   - darwin/linux: build/Release/pty.node(唯一主 addon)
+  //   - win32 1.1.x: build/Release/conpty.node(主)+ pty.node(winpty 兜底,都会编译)
+  //   - win32 1.2.x: build/Release/conpty.node(conpty-only,binding.gyp 不再有 pty target)
+  // 以「运行时 windowsPtyAgent 实际加载的 conpty.node / pty.node」为必需项;
+  // 缺了直接抛出,避免发出无法启动 PTY 的包。
+  const nodePtyReleaseDir = path.join(
     buildPath,
     'node_modules',
     'node-pty',
     'build',
     'Release',
-    'pty.node',
   );
-  if (!fs.existsSync(ptyNative)) {
-    throw new Error(`[forge:afterCopy] rebuild reported success but ${ptyNative} is missing`);
+  const requiredPtyNative = path.join(
+    nodePtyReleaseDir,
+    platform === 'win32' ? 'conpty.node' : 'pty.node',
+  );
+  if (!fs.existsSync(requiredPtyNative)) {
+    throw new Error(`[forge:afterCopy] rebuild reported success but ${requiredPtyNative} is missing`);
   }
 
   // node-pty 被整目录纳入 asar.unpack（为放出 spawn-helper / winpty 等运行时二进制），
@@ -546,7 +563,29 @@ async function rebuildNativeDepsInPackage(
     console.log(`[forge:afterCopy] pruned node-gyp intermediates: ${ptyObjTarget}`);
   }
 
-  console.log(`[forge:afterCopy] rebuild ok: ${sqliteNative}, ${ptyNative}`);
+  // ── ABI 硬校验（fail closed）：打包流程统一的最后防线 ────────────────────
+  // 用打包同一套 Electron 的加载器实际 dlopen 这些 .node：非 Electron ABI 的
+  // 产物（如未被 force rebuild 覆盖的 137）在这里直接抛错终止打包，不会再混进
+  // 安装包。交叉打包（本仓不支持，见 package-desktop.mjs）时宿主 Electron 无法
+  // 加载目标平台的二进制格式，跳过并显式警告，避免误杀。
+  if (platform === process.platform) {
+    assertNativeModuleAbi(sqliteNative, 'better-sqlite3');
+    // Release 目录下凡存在的 .node 都会被运行时 dlopen：conpty.node /
+    // conpty_console_list.node 恒有,pty.node 仅 node-pty 1.1.x 编译——逐个验,
+    // 不按版本猜文件名。
+    for (const fileName of fs
+      .readdirSync(nodePtyReleaseDir)
+      .filter((f) => f.endsWith('.node'))
+      .sort()) {
+      assertNativeModuleAbi(path.join(nodePtyReleaseDir, fileName), `node-pty (${fileName})`);
+    }
+  } else {
+    console.warn(
+      `[forge:afterCopy] ABI check skipped: packaging for ${platform} on ${process.platform} (cross-compile; host Electron loader probe unavailable)`,
+    );
+  }
+
+  console.log(`[forge:afterCopy] rebuild ok: ${sqliteNative}, ${requiredPtyNative}`);
 }
 
 const isDev =
@@ -1402,6 +1441,14 @@ if (isWin) {
   makers.unshift(
     new MakerNSIS({
       getAppBuilderConfig: async () => ({
+        // 双保险（2026-08-20 打包流程统一）：forge-maker-nsis 走 prepackaged 模式，
+        // app-builder-lib 的 installAppDependencies 本就直接 return（见 packager.js
+        // `prepackaged != null` 分支）；显式关掉是防止未来 app-builder 逻辑变化时在
+        // 打包机环境里做不可控的原生重编——不可控 rebuild 正是 ABI 137 坏包的潜在
+        // 来源之一。原生模块重建的唯一入口是 afterCopy 的
+        // rebuildNativeDepsInPackage（force:true + ABI 硬校验），这里只许打包、
+        // 不许重编。
+        npmRebuild: false,
         // NSIS installer(Setup.exe)与 uninstaller(Uninstall <App>.exe)的签名。
         // 这是签卸载器的唯一入口(Issue #998):uninstaller 由 NSIS 编译期两遍生成后
         // 嵌入 installer,postPackage 阶段还不存在、也没有独立成品文件可事后补签,
@@ -1637,7 +1684,7 @@ const config: ForgeConfig = {
           try {
             bundleNativeDeps(buildPath, platform, arch);
             stageDshRuntime(buildPath);
-            await rebuildNativeDepsInPackage(buildPath, electronVersion, arch);
+            await rebuildNativeDepsInPackage(buildPath, electronVersion, platform, arch);
             copySqliteVecBinary(buildPath, platform, arch);
             callback();
           } catch (err) {
