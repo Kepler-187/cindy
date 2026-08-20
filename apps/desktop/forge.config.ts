@@ -21,6 +21,7 @@ import {
   resolveCindyRegion,
 } from '@cindy/maker-shared/brand-identity';
 import { stageMacIOSSimulatorHelper } from './forge-ios-simulator-helper';
+import { resolvePackageDir, resolveOptions } from './forge-package-resolution';
 import { stagePackagedThirdPartyNotices } from './forge-third-party-notices';
 import { assertNativeModuleAbi } from './forge-native-abi-check';
 
@@ -209,64 +210,9 @@ function koffiPlatformPkg(platform: string, arch: string): string {
   return `@koromix/koffi-${koffiPlatform}-${arch}`;
 }
 
-// Locate a package's directory on disk. Some packages ship a strict `exports`
-// map that hides the obvious resolve targets:
-//   - `long` blocks `./package.json` but exposes a main entry → walk up from
-//     the bare specifier resolve.
-//   - `@img/sharp-{platform}-{arch}` blocks BOTH `./package.json` AND the bare
-//     specifier (no main), but exposes `./package` → resolve that, it points
-//     at package.json directly.
-// Final fallback: locate via the workspace root's hoisted node_modules path
-// (we use pnpm node-linker=hoisted, so every dep lives under root node_modules).
-function resolvePackageDir(dep: string, fromDirs?: string[]): string {
-  // fromDirs: 从这些目录的视角解析(require.resolve 的 paths 选项)。用于消歧
-  // 多版本依赖 —— 例如 node-addon-api 同时存在 1.7.2 (iconv-corefoundation, mac
-  // dmg 工具链, 无 `.targets`) 和 7.1.1 (node-pty 需要)。hoisted 布局下 root
-  // node_modules 只留一个版本, 若被 1.7.2 占了, 直接 resolve 会拿错版本, node-pty
-  // 的 binding.gyp `require('node-addon-api').targets` 会因 undefined 而炸。传
-  // node-pty 目录当 fromDirs 就能锁定它实际用的 7.1.1 (nested 或 hoisted 都覆盖)。
-  if (fromDirs && fromDirs.length > 0) {
-    try {
-      return path.dirname(_require.resolve(`${dep}/package.json`, { paths: fromDirs }));
-    } catch {
-      // ignore, fall through to default resolution
-    }
-  }
-  try {
-    return path.dirname(_require.resolve(`${dep}/package.json`, resolveOptions(fromDirs)));
-  } catch {
-    // ignore, try next strategy
-  }
-  try {
-    // sharp-style: `./package` exports map entry → resolves to package.json
-    const pkgJson = _require.resolve(`${dep}/package`, resolveOptions(fromDirs));
-    if (pkgJson.endsWith('package.json')) return path.dirname(pkgJson);
-  } catch {
-    // ignore, try next strategy
-  }
-  try {
-    let dir = path.dirname(_require.resolve(dep, resolveOptions(fromDirs)));
-    while (dir !== path.dirname(dir)) {
-      if (fs.existsSync(path.join(dir, 'package.json'))) {
-        const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
-        if (pkg.name === dep) return dir;
-      }
-      dir = path.dirname(dir);
-    }
-  } catch {
-    // ignore, try final filesystem fallback
-  }
-  // Final fallback: pnpm hoisted layout — every dep is at <repo>/node_modules/<dep>.
-  // __dirname is apps/desktop, so repo root is two levels up.
-  const hoisted = path.join(__dirname, '..', '..', 'node_modules', dep);
-  if (fs.existsSync(path.join(hoisted, 'package.json'))) return hoisted;
-  throw new Error(`[forge] cannot locate package dir for "${dep}"`);
-}
-
-function resolveOptions(fromDirs?: string[]): { paths: string[] } | undefined {
-  return fromDirs && fromDirs.length > 0 ? { paths: fromDirs } : undefined;
-}
-
+// Locate a package's directory on disk (see forge-package-resolution.ts for
+// the strategy list, including the `@modelcontextprotocol/sdk` exports-map
+// catch-all case that previously staged a broken DSH runtime closure).
 function copyDiscordRuntimeDeps(destModules: string): void {
   const seen = new Set<string>();
   for (const dep of DISCORD_RUNTIME_DEPS) {

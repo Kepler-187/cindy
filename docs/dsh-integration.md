@@ -1,6 +1,6 @@
 # DeepSeek Harness（DSH）集成与验收
 
-更新日期：2026-08-19
+更新日期：2026-08-20
 状态：实现已进入当前工作区；自动化验证与真实 API 验收分别记录，不以未实际发出的真实请求替代。
 
 ## 定位
@@ -221,9 +221,47 @@ worker 的 `ready` 只证明 parentPort 和虚拟 stdin 已就绪；RPC `initial
   规避。
 - `DSH utility process did not become ready`：检查 worker 入口、parentPort 与 Forge 打包产物。
 - `DSH runtime failed to load` 或进程提前退出：检查 ESM/ASAR 依赖闭包和随包 DSH 入口。
+- `LAZY_CREATE_FAILED: DSH utility process exited (code=1)`：DSH 进程在 ready 前秒退，先看
+  `agent-*.ndjson` 里 `dsh stderr` 的具体原因（本错误本身不含根因）；若 stderr 报
+  `Cannot find module 'ajv'` 等依赖缺失，见下方「本地 DSH runtime 打包依赖闭包」故障记录。
 - `DSH provider selection is ambiguous`：会话仍带故障版本的来源 ID，且当前有多个合格 DeepSeek 来源；让用户
   重新选择原供应商，不能静默猜一个。
 - `initialize` 成功后才出现的 HTTP 错误：再检查 Base URL、密钥权限、网络与上游服务状态。
+
+### 已知故障记录：本地 DSH runtime 打包依赖闭包（2026-08-20 修复）
+
+症状：打包版（CindyBeta）新建 DSH 任务即失败，报
+`LAZY_CREATE_FAILED: DSH utility process exited (code=1)`；`agent-*.ndjson` 的 `dsh stderr` 显示：
+
+```
+DSH runtime failed to load: ... failed to import loader entry mcp-cindy
+(@deepseek-ai/dsh-mcp-client): Cannot find module 'ajv'
+Require stack:
+- ...app.asar\node_modules\@modelcontextprotocol\sdk\validation\ajv-provider.js
+```
+
+根因在打包期而非运行期：`@modelcontextprotocol/sdk` 的 `exports` map 含 catch-all `./*`，
+`require.resolve('@modelcontextprotocol/sdk/package.json')` 会解析到包内
+`dist/cjs/package.json`（一个只有 `{"type":"commonjs"}` 的 stub）。Forge 的
+`resolvePackageDir` 直接拿解析结果的父目录当包根，于是 `copyDshDependencyTree` 把
+`dist/cjs` 内容当成整个包复制，读到的 `dependencies` 为空——SDK 的 17 个普通依赖
+（`ajv`/`ajv-formats`/`hono`/`express`/`jose` 等）与 required peer `zod` 整棵漏拷。
+运行时 SDK 的 `validation/ajv-provider.js` `require('ajv')` 失败，插件树加载失败，
+DSH 进程在 ready 握手前退出。2026-08-20 的 DSH 插件通道提交（`mcp-cindy` loader 行）使
+`@deepseek-ai/dsh-mcp-client` 进入每个本地会话的加载路径，才让这条打包缺陷首次暴露。
+
+修复：`apps/desktop/forge-package-resolution.ts` 新增 `packageRootForPkgJson`——
+解析出的 `package.json` 必须向上校验到 `name === dep` 的真实包根，stub 目录不再被当作
+包根；`resolvePackageDir` 的三个解析策略（`package.json`、sharp 式 `./package`、裸
+specifier 向上走）全部经过该校验。该模块同时供 `copyDshDependencyTree`（DSH 闭包）与
+`copyDependencyTree`（native 运行时依赖）复用，两路一并修复。回归测试：
+`apps/desktop/src/main/__tests__/forgePackageResolution.test.ts`（stub 向上寻根、
+普通包解析、SDK 必须解析到真实根且能看到 `ajv`）。修复后需重新打包生效。
+
+排查要点：先区分「worker 未 ready」与「RPC 层失败」——本故障在 `agent-*.ndjson` 有
+`dsh stderr` 的 `DSH runtime failed to load` 行（worker 顶层 import 失败路径），与
+`dsh RPC timeout`（bridge 已加载但握手超时）不同；打包依赖闭包问题一律以 asar 内
+`node_modules` 实际内容为准，不要只看根 `node_modules` 是否完整。
 
 DSH Web 控制台（`dsh web` profile）在打包版上有三个已知故障模式，根因都在「打包运行时的模块解析」，
 DSH 上游已修复（fork `Kepler-187/deepseek-harness`，Agent Note
